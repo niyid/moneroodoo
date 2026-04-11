@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>No Custodian, No Trust Required: Inside payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo</title>
+
+<!-- SEO -->
+<meta name="description" content="A full technical walkthrough of payment_monero_rpc — an Odoo 18 module that accepts Monero across e-commerce and POS via direct daemon/wallet RPC, subaddress isolation, HMAC-signed payment proofs, and a three-pass, 164-issue security hardening audit.">
+<meta name="author" content="niyid">
+<meta name="keywords" content="Monero, XMR, Odoo, payment provider, RPC, subaddress, point of sale, e-commerce, cryptocurrency, privacy, open source, code review">
+
+<!-- Open Graph (Substack, Facebook, LinkedIn link previews) -->
+<meta property="og:type" content="article">
+<meta property="og:title" content="No Custodian, No Trust Required: Inside payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo">
+<meta property="og:description" content="No payment processor. No API key to a third party. Just Odoo talking directly to your own Monero daemon and wallet — subaddress by subaddress, confirmation by confirmation.">
+<meta property="og:url" content="https://niyid.github.io/moneroodoo/moneroodoo-article.html">
+<meta property="og:site_name" content="Moneroodoo">
+<meta property="article:author" content="https://github.com/niyid">
+
+<!-- Twitter/X Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="No Custodian, No Trust Required: Inside payment_monero_rpc">
+<meta name="twitter:description" content="A technical deep-dive into an Odoo module that accepts Monero via direct RPC — subaddress isolation, HMAC payment proofs, and a 164-issue security audit trail.">
+
+<!-- Canonical -->
+<link rel="canonical" href="https://niyid.github.io/moneroodoo/moneroodoo-article.html">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=DM+Sans:wght@300;400;500&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
+  :root {
+    --bg:           #06080d;
+    --surface:      #0c1018;
+    --panel:        #101520;
+    --border:       #1c2433;
+    --border-hi:    #2a3a52;
+    --emerald:      #10b981;
+    --emerald-dim:  rgba(16,185,129,0.15);
+    --amber:        #f59e0b;
+    --amber-dim:    rgba(245,158,11,0.12);
+    --red:          #ef4444;
+    --red-dim:      rgba(239,68,68,0.12);
+    --blue:         #60a5fa;
+    --blue-dim:     rgba(96,165,250,0.12);
+    --violet:       #a78bfa;
+    --text:         #e2e8f0;
+    --muted:        #64748b;
+    --muted-hi:     #94a3b8;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 300;
+    line-height: 1.75;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.5;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(16,185,129,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(16,185,129,0.025) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 28px 96px;
+  }
+
+  .hero {
+    padding: 80px 0 64px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 64px;
+    position: relative;
+  }
+
+  .hero-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--emerald);
+    margin-bottom: 28px;
+  }
+
+  .hero-eyebrow::before {
+    content: '';
+    display: block;
+    width: 32px;
+    height: 1px;
+    background: var(--emerald);
+  }
+
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(36px, 6vw, 64px);
+    font-weight: 900;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    margin-bottom: 28px;
+  }
+
+  h1 .accent { color: var(--emerald); }
+  h1 .italic { font-style: italic; }
+
+  .hero-meta {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+
+  .hero-meta span { display: flex; align-items: center; gap: 6px; }
+  .hero-meta .sep { color: var(--border-hi); }
+
+  .hero-lead {
+    font-size: 18px;
+    font-weight: 300;
+    color: var(--muted-hi);
+    line-height: 1.7;
+    max-width: 680px;
+    border-left: 3px solid var(--emerald);
+    padding-left: 20px;
+  }
+
+  section { margin-bottom: 72px; }
+
+  .section-kicker {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--emerald);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .section-kicker::after {
+    content: '';
+    display: block;
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(24px, 3.5vw, 36px);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    margin-bottom: 24px;
+  }
+
+  h3 {
+    font-family: 'Playfair Display', serif;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+
+  p { margin-bottom: 18px; color: var(--muted-hi); }
+  p:last-child { margin-bottom: 0; }
+
+  strong { color: var(--text); font-weight: 500; }
+
+  code.inline {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.87em;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--emerald);
+  }
+
+  .pull-quote {
+    background: var(--emerald-dim);
+    border: 1px solid rgba(16,185,129,0.25);
+    border-left: 4px solid var(--emerald);
+    border-radius: 0 8px 8px 0;
+    padding: 24px 28px;
+    margin: 32px 0;
+  }
+
+  .pull-quote p {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    font-size: 18px;
+    line-height: 1.6;
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+
+  .pull-quote cite {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--emerald);
+    text-transform: uppercase;
+  }
+
+  .pillars-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 32px 0;
+  }
+
+  @media (max-width: 600px) { .pillars-grid { grid-template-columns: 1fr; } }
+
+  .pillar {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .pillar:hover { border-color: var(--border-hi); }
+
+  .pillar-icon {
+    font-size: 28px;
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .pillar-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .pillar h3 {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+
+  .pillar p {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .pillar-emerald { border-left: 3px solid var(--emerald); }
+  .pillar-amber   { border-left: 3px solid var(--amber); }
+  .pillar-blue    { border-left: 3px solid var(--blue); }
+  .pillar-violet  { border-left: 3px solid var(--violet); }
+
+  .code-block {
+    background: #070a0f;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 28px 0;
+    font-size: 13px;
+  }
+
+  .code-header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .code-header span {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+
+  .code-header .lang {
+    color: var(--emerald);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .code-body {
+    padding: 20px 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+    font-size: 12.5px;
+  }
+
+  .kw { color: #c792ea; }
+  .fn { color: #82aaff; }
+  .str { color: #c3e88d; }
+  .num { color: #f78c6c; }
+  .cm { color: #546e7a; font-style: italic; }
+  .ty { color: #ffcb6b; }
+  .prop { color: var(--emerald); }
+
+  .flow-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 28px;
+    margin: 32px 0;
+  }
+
+  .diagram-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 24px;
+  }
+
+  .flow-steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    margin-top: 8px;
+  }
+
+  .flow-step {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .flow-step:last-child { border-bottom: none; }
+
+  .flow-step-num {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .step-emerald { background: var(--emerald-dim); color: var(--emerald); border: 1px solid rgba(16,185,129,0.3); }
+  .step-amber   { background: var(--amber-dim);   color: var(--amber);   border: 1px solid rgba(245,158,11,0.3); }
+  .step-blue    { background: var(--blue-dim);     color: var(--blue);    border: 1px solid rgba(96,165,250,0.3); }
+  .step-red     { background: var(--red-dim);      color: var(--red);     border: 1px solid rgba(239,68,68,0.3); }
+  .step-violet  { background: rgba(167,139,250,0.12); color: var(--violet); border: 1px solid rgba(167,139,250,0.3); }
+
+  .flow-step-content strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+
+  .flow-step-content p {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0;
+    line-height: 1.55;
+  }
+
+  .privacy-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--emerald-dim);
+    border: 1px solid rgba(16,185,129,0.25);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--emerald);
+    letter-spacing: 0.08em;
+    margin-top: 6px;
+  }
+
+  .compare-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 28px 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .compare-header {
+    display: grid;
+    grid-template-columns: 160px 1fr 1fr;
+    background: var(--panel);
+    border-bottom: 2px solid var(--border-hi);
+  }
+
+  .compare-header-cell {
+    padding: 12px 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .compare-header-cell:nth-child(1) { color: var(--muted); }
+  .compare-header-cell:nth-child(2) { color: var(--red); border-left: 1px solid var(--border); }
+  .compare-header-cell:nth-child(3) { color: var(--emerald); border-left: 1px solid var(--border); }
+
+  .compare-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 1fr;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+
+  .compare-row:last-child { border-bottom: none; }
+  .compare-row:hover { background: rgba(255,255,255,0.018); }
+
+  .compare-cell {
+    padding: 14px 16px;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .compare-cell:nth-child(2),
+  .compare-cell:nth-child(3) { border-left: 1px solid var(--border); }
+
+  .compare-cell.dim-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .compare-cell.bad  { color: #f87171; }
+  .compare-cell.good { color: #34d399; }
+  .compare-cell.mid  { color: var(--amber); }
+
+  @media (max-width: 580px) {
+    .compare-header { grid-template-columns: 1fr; }
+    .compare-header-cell:nth-child(1) { display: none; }
+    .compare-header-cell:nth-child(2),
+    .compare-header-cell:nth-child(3) { border-left: none; border-top: 1px solid var(--border); }
+    .compare-row { grid-template-columns: 1fr; }
+    .compare-cell.dim-label {
+      background: var(--panel);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 8px 16px 4px;
+    }
+    .compare-cell:nth-child(2),
+    .compare-cell:nth-child(3) { border-left: none; padding-top: 6px; padding-bottom: 6px; }
+    .compare-cell:nth-child(3) { padding-bottom: 14px; }
+  }
+
+  /* ─── AUDIT STAT GRID ─────────────────────────────────────────── */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 28px 0;
+  }
+
+  @media (max-width: 640px) { .stat-grid { grid-template-columns: 1fr 1fr; } }
+
+  .stat-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 16px;
+    text-align: center;
+  }
+
+  .stat-num {
+    font-family: 'Playfair Display', serif;
+    font-size: 30px;
+    font-weight: 900;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .stat-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .stat-emerald { color: var(--emerald); }
+  .stat-amber   { color: var(--amber); }
+  .stat-red     { color: var(--red); }
+  .stat-blue    { color: var(--blue); }
+
+  /* ─── TECH STACK PILLS ───────────────────────────────────────── */
+  .tech-stack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 20px 0;
+  }
+
+  .tech-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted-hi);
+    letter-spacing: 0.05em;
+    transition: border-color 0.2s, color 0.2s;
+  }
+
+  .tech-pill:hover { border-color: var(--border-hi); color: var(--text); }
+  .tech-pill .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dot-green  { background: var(--emerald); }
+  .dot-amber  { background: var(--amber); }
+  .dot-blue   { background: var(--blue); }
+  .dot-violet { background: var(--violet); }
+  .dot-red    { background: var(--red); }
+
+  .callout {
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin: 24px 0;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+
+  .callout-warn {
+    background: var(--amber-dim);
+    border: 1px solid rgba(245,158,11,0.25);
+  }
+
+  .callout-info {
+    background: var(--blue-dim);
+    border: 1px solid rgba(96,165,250,0.25);
+  }
+
+  .callout-good {
+    background: var(--emerald-dim);
+    border: 1px solid rgba(16,185,129,0.25);
+  }
+
+  .callout-bad {
+    background: var(--red-dim);
+    border: 1px solid rgba(239,68,68,0.25);
+  }
+
+  .callout-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+
+  .callout-body p { font-size: 13.5px; margin: 0; line-height: 1.6; }
+  .callout-body strong { display: block; margin-bottom: 4px; font-size: 13px; }
+
+  .article-footer {
+    border-top: 1px solid var(--border);
+    padding-top: 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+
+  .footer-left p {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    margin: 0 0 6px;
+  }
+
+  .footer-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--emerald-dim);
+    border: 1px solid rgba(16,185,129,0.3);
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--emerald);
+    text-decoration: none;
+    letter-spacing: 0.08em;
+    transition: background 0.2s;
+  }
+
+  .footer-link:hover { background: rgba(16,185,129,0.22); }
+
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .hero { animation: fadeSlideUp 0.7s ease both; }
+  section { animation: fadeSlideUp 0.6s ease both; }
+  section:nth-child(2) { animation-delay: 0.1s; }
+  section:nth-child(3) { animation-delay: 0.15s; }
+  section:nth-child(4) { animation-delay: 0.2s; }
+  section:nth-child(5) { animation-delay: 0.25s; }
+  section:nth-child(6) { animation-delay: 0.3s; }
+
+  @media (max-width: 600px) {
+    .container { padding: 0 16px 64px; }
+    .hero { padding: 48px 0 40px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ═══ HERO ═══ -->
+  <header class="hero">
+    <div class="hero-eyebrow">Cryptocurrency Payments · Odoo ERP · Code Audit</div>
+
+    <h1>No Custodian, <span class="italic">No Trust</span> <span class="accent">Required</span></h1>
+
+    <div class="hero-meta">
+      <span>📦 payment_monero_rpc</span>
+      <span class="sep">·</span>
+      <span>🏷️ Odoo 18</span>
+      <span class="sep">·</span>
+      <span>⛓️ Monero (XMR)</span>
+      <span class="sep">·</span>
+      <span>🔍 Three-Pass Security Audit</span>
+    </div>
+
+    <p class="hero-lead">
+      Every mainstream crypto payment gateway asks a merchant to trust a third party: an API key,
+      a hosted checkout page, a company that can freeze funds or leak an order history. The
+      <strong>payment_monero_rpc</strong> module for Odoo takes the opposite approach — it speaks
+      directly to a self-hosted Monero daemon and wallet over RPC, generates a fresh subaddress
+      per order, and verifies payment on-chain without a single external party ever seeing a
+      transaction. This is a full technical walkthrough of how it works, and the 164-issue,
+      three-pass audit that hardened it.
+    </p>
+  </header>
+
+  <!-- ═══ SECTION 1: THE PROBLEM ═══ -->
+  <section>
+    <div class="section-kicker">The Problem</div>
+    <h2>Crypto Checkout Usually Means Trusting Someone Else's Server</h2>
+
+    <p>
+      Most Monero payment integrations for e-commerce platforms fall into one of two categories.
+      The first is a hosted gateway: the merchant's site redirects to a third-party checkout page,
+      which holds the wallet keys, sets the price, and reports back "paid" or "not paid" via a
+      webhook the merchant has to trust blindly. The second is a thin API wrapper around a
+      commercial payment processor that happens to support XMR alongside a dozen other coins —
+      convenient, but it reintroduces exactly the kind of custodial intermediary that Monero was
+      built to avoid.
+    </p>
+
+    <p>
+      For a merchant who already runs Monero infrastructure — a <code class="inline">monerod</code>
+      daemon and a <code class="inline">monero-wallet-rpc</code> instance — neither option makes
+      sense. The wallet is right there. What's missing is the glue: something that can generate a
+      unique receiving address per order, poll the chain for incoming transfers, apply a
+      confirmation policy, and hand a definitive "paid" signal back to Odoo's sales and
+      point-of-sale flows, without ever touching a third-party server.
+    </p>
+
+    <div class="callout callout-info">
+      <div class="callout-icon">🔑</div>
+      <div class="callout-body">
+        <strong>The core design constraint</strong>
+        <p>Every Monero amount that moves through this module touches only two systems the
+        merchant already controls: their own Odoo database and their own Monero daemon/wallet
+        RPC endpoints. No API key. No hosted checkout. No webhook from a company that could go
+        offline, get subpoenaed, or simply decide to hold funds.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 2: THE SOLUTION ═══ -->
+  <section>
+    <div class="section-kicker">The Solution</div>
+    <h2>payment_monero_rpc: A Self-Hosted Bridge Between Odoo and the Monero Network</h2>
+
+    <p>
+      <code class="inline">payment_monero_rpc</code> is the current, unified generation of a
+      lineage of Monero addons for Odoo. Two earlier modules — <code class="inline">monero-rpc-odoo</code>
+      (a <code class="inline">payment.acquirer</code>-based e-commerce integration for Odoo 14) and
+      <code class="inline">monero-rpc-odoo-pos</code> (a companion point-of-sale payment method) —
+      have been merged into a single application built against Odoo 18's newer
+      <code class="inline">payment.provider</code> framework, following Odoo's own naming
+      convention for payment modules. The result installs as one app, registers as
+      <em>Monero (RPC)</em> in Odoo's payment provider list, and works across both the website
+      checkout flow and the point-of-sale register.
+    </p>
+
+    <p>
+      Underneath the Odoo integration boilerplate, four architectural decisions do the real work:
+    </p>
+
+    <div class="pillars-grid">
+      <div class="pillar pillar-emerald">
+        <span class="pillar-icon">🧩</span>
+        <div class="pillar-name">Isolation</div>
+        <h3>One Subaddress Per Order</h3>
+        <p>Every order gets its own Monero subaddress via <code class="inline">wallet.new_address()</code>,
+        so incoming transfers can be matched to a specific order without a shared payment ID —
+        and without leaking that two orders came from the same wallet.</p>
+      </div>
+      <div class="pillar pillar-amber">
+        <span class="pillar-icon">🔌</span>
+        <div class="pillar-name">No Custodian</div>
+        <h3>Direct Daemon &amp; Wallet RPC</h3>
+        <p>The module talks straight to <code class="inline">monerod</code> and
+        <code class="inline">monero-wallet-rpc</code> using the <code class="inline">monero</code>
+        Python library. There is no third-party checkout server anywhere in the payment path.</p>
+      </div>
+      <div class="pillar pillar-blue">
+        <span class="pillar-icon">🧮</span>
+        <div class="pillar-name">Precision</div>
+        <h3>Decimal-Safe State Machine</h3>
+        <p>Payments move through <code class="inline">pending → partial → paid_unconfirmed →
+        confirmed</code> (or <code class="inline">overpaid / expired / failed</code>), with row
+        locks preventing double-confirmation and terminal-state guards preventing regression.</p>
+      </div>
+      <div class="pillar pillar-violet">
+        <span class="pillar-icon">🖋️</span>
+        <div class="pillar-name">Verifiability</div>
+        <h3>HMAC-Signed Payment Proofs</h3>
+        <p>Every confirmed payment can generate a tamper-evident proof — a SHA-256 HMAC over the
+        payment ID, amount received, and address — signed with a server-side key, for disputes
+        or bookkeeping.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 3: TECHNICAL DEEP DIVE ═══ -->
+  <section>
+    <div class="section-kicker">Technical Deep Dive</div>
+    <h2>Two RPC Clients, One Model Layer</h2>
+
+    <p>
+      The module cleanly separates the two roles a Monero node plays. <code class="inline">MoneroDaemon</code>
+      (<code class="inline">models/monero_daemon.py</code>) is a lightweight status model that
+      periodically polls <code class="inline">monerod</code> for sync height, peer count,
+      difficulty, and network type, and stores a rolling history of snapshots — this is what
+      confirmation counts are calculated against, so it never has to make a live RPC call on
+      every page load. <code class="inline">PaymentProviderMonero</code>
+      (<code class="inline">models/payment_provider.py</code>) extends Odoo's built-in
+      <code class="inline">payment.provider</code> model and owns the wallet-side connection: it
+      builds a <code class="inline">Wallet(JSONRPCWallet(...))</code> client from the configured
+      RPC URL, generates subaddresses, fetches balances, and converts fiat order totals into XMR
+      using a cached exchange rate.
+    </p>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span>payment_provider.py — creating a payment from a fiat order total</span>
+        <span class="lang">Python</span>
+      </div>
+      <div class="code-body"><span class="kw">def</span> <span class="fn">_create_monero_from_fiat_payment</span>(<span class="kw">self</span>, order_ref, amount, currency, order_id):
+    rate = <span class="kw">self</span>.get_xmr_rate(order_currency)
+    wallet = <span class="kw">self</span>._get_wallet_client()
+
+    <span class="kw">if</span> <span class="kw">self</span>.use_subaddresses:
+        label = <span class="str">f"Order_{order_ref}"</span>
+        subaddress = wallet.new_address(label=label)
+        payment_values = {
+            <span class="str">'payment_id'</span>: <span class="ty">str</span>(subaddress[<span class="num">1</span>]),  <span class="cm"># subaddress index</span>
+            <span class="str">'address_seller'</span>: subaddress[<span class="num">0</span>],
+            <span class="str">'is_subaddress'</span>: <span class="kw">True</span>,
+        }
+    <span class="cm"># ... integrated-address fallback for legacy payment-ID mode omitted</span>
+
+    payment = <span class="kw">self</span>.env[<span class="str">'monero.payment'</span>].sudo().create({
+        **payment_values,
+        <span class="str">'amount'</span>: <span class="ty">float</span>(Decimal(<span class="ty">str</span>(amount)) / Decimal(<span class="ty">str</span>(rate))),
+        <span class="str">'exchange_rate'</span>: rate,
+        <span class="str">'state'</span>: <span class="str">'pending'</span>,
+        <span class="str">'expiration'</span>: fields.Datetime.add(fields.Datetime.now(), hours=<span class="num">24</span>),
+    })
+    <span class="kw">return</span> payment</div>
+    </div>
+
+    <p>
+      Note the <code class="inline">Decimal(str(amount)) / Decimal(str(rate))</code> conversion —
+      a deliberate choice to avoid the classic float-division bug where two innocuous-looking
+      floating-point numbers silently produce a fiat-to-XMR conversion that's off by a fraction of
+      a piconero. The same pattern appears everywhere money changes representation in this
+      codebase: piconero conversion uses the integer constant
+      <code class="inline">1_000_000_000_000</code> rather than the float literal
+      <code class="inline">1e12</code>, and the HMAC payment-proof signature normalises amounts
+      through <code class="inline">Decimal(...).normalize()</code> before hashing, so the same
+      payment never produces two different signatures depending on how Python happened to render
+      a float that day.
+    </p>
+
+    <div class="pull-quote">
+      <p>Floats are for display. Decimals are for money. The moment an amount crosses from "what
+      the user sees" to "what gets compared, hashed, or persisted," it has to become a Decimal —
+      or the module is one rounding error away from a payment that's confirmed on-chain but
+      rejected by the state machine.</p>
+      <cite>— design principle, monero_payment.py</cite>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 4: PAYMENT LIFECYCLE ═══ -->
+  <section>
+    <div class="section-kicker">End-to-End Flow</div>
+    <h2>From Checkout Click to Confirmed On-Chain Payment</h2>
+
+    <p>
+      <code class="inline">check_payment_status()</code> on <code class="inline">monero.payment</code>
+      is the workhorse of the module — called from a cron job every few minutes, and on demand
+      when a customer or cashier wants a live status check. Here's the full path a payment takes:
+    </p>
+
+    <div class="flow-diagram">
+      <div class="diagram-title">Payment Lifecycle — monero.payment state machine</div>
+      <div class="flow-steps-list">
+
+        <div class="flow-step">
+          <div class="flow-step-num step-emerald">1</div>
+          <div class="flow-step-content">
+            <strong>Order placed → subaddress generated</strong>
+            <p>A fresh subaddress (or, in legacy mode, an integrated address with a random
+            payment ID) is created and validated against the configured network before the
+            <code class="inline">monero.payment</code> record is written.</p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-step-num step-blue">2</div>
+          <div class="flow-step-content">
+            <strong>QR code and address rendered to the customer</strong>
+            <p>A QR payload is computed via an ORM dependency chain and served from the
+            database, not held in the HTTP session — closing a code-path where a QR image blob
+            once lingered in session storage.</p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-step-num step-amber">3</div>
+          <div class="flow-step-content">
+            <strong>Wallet RPC polled for incoming transfers</strong>
+            <p><code class="inline">wallet.incoming()</code> is filtered by subaddress index at
+            the RPC level where the library supports it, falling back to a Python-side filter by
+            address only when it doesn't — avoiding an O(n) scan of the entire wallet history on
+            every poll.</p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-step-num step-violet">4</div>
+          <div class="flow-step-content">
+            <strong>Row-locked, terminal-state-guarded update</strong>
+            <p>A <code class="inline">SELECT ... FOR UPDATE NOWAIT</code> is taken on the payment
+            row before any write, and any payment already in <code class="inline">confirmed</code>,
+            <code class="inline">expired</code>, or <code class="inline">failed</code> returns
+            immediately — so two concurrent cron workers can never double-confirm the same
+            payment, and a confirmed payment can never regress to pending.</p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-step-num step-red">5</div>
+          <div class="flow-step-content">
+            <strong>Confirmation threshold evaluated</strong>
+            <p>Amount received and confirmation count (read from the cached
+            <code class="inline">monero.daemon</code> height, not a fresh RPC call) are compared
+            against the provider's configured threshold to resolve
+            <code class="inline">partial</code>, <code class="inline">paid_unconfirmed</code>,
+            <code class="inline">confirmed</code>, or <code class="inline">overpaid</code>.</p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-step-num step-emerald">6</div>
+          <div class="flow-step-content">
+            <strong>Order confirmed, proof generated, single email sent</strong>
+            <p><code class="inline">_payment_confirmed()</code> writes the final state, links the
+            matching <code class="inline">payment.transaction</code> by
+            <code class="inline">reference</code>, confirms the sale order with
+            <code class="inline">send_email=False</code>, and sends exactly one confirmation
+            email from the payment record's own template — a deliberate fix for an earlier
+            double-email bug.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="callout callout-good">
+      <div class="callout-icon">🛡️</div>
+      <div class="callout-body">
+        <strong>Access control on every step</strong>
+        <p>The website controller validates every order lookup against a
+        <code class="inline">hmac.compare_digest</code>-checked access token before it will
+        create a payment, check status, or serve a QR code — closing what was originally a
+        complete bypass where <code class="inline">access_token</code> was accepted as a
+        parameter but never actually verified.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 5: POS INTEGRATION ═══ -->
+  <section>
+    <div class="section-kicker">Point of Sale</div>
+    <h2>The Same Wallet, at the Till</h2>
+
+    <p>
+      Because <code class="inline">payment_monero_rpc</code> depends on
+      <code class="inline">point_of_sale</code> and <code class="inline">pos_online_payment</code>,
+      the identical fiat-to-XMR conversion and subaddress logic used on the website checkout is
+      reused inside the POS register. An OWL component,
+      <code class="inline">MoneroPaymentPopup</code>, patches Odoo's
+      <code class="inline">PaymentScreen</code> to detect a payment line whose method is named
+      "Monero RPC," generate the subaddress, render a QR code in-register, and poll for
+      confirmation — with a shorter default expiry window than the e-commerce flow, since a
+      customer standing at a register isn't going to wait 24 hours.
+    </p>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span>payment_screen_monero.js — reactive status state, not prop mutation</span>
+        <span class="lang">JavaScript</span>
+      </div>
+      <div class="code-body"><span class="kw">import</span> { Component, Dialog, useState } <span class="kw">from</span> <span class="str">"@odoo/owl"</span>;
+<span class="kw">import</span> { DateTime } <span class="kw">from</span> <span class="str">"luxon"</span>;
+
+patch(PaymentScreen.prototype, {
+    <span class="fn">setup</span>() {
+        <span class="kw">super</span>.setup();
+        <span class="kw">this</span>.activeMoneroPayments = <span class="kw">new</span> <span class="ty">Set</span>();
+        <span class="cm">// Reactive state object — not this.props mutation, which OWL forbids</span>
+        <span class="kw">this</span>.moneroState = useState({
+            paymentStatusClass: <span class="str">"info"</span>,
+            statusIconClass: <span class="str">"fa-hourglass-half"</span>,
+            confirmationCount: <span class="num">0</span>,
+        });
+    },
+});</div>
+    </div>
+
+    <p>
+      This snippet reflects one of the more instructive bugs found during review: an earlier
+      version of <code class="inline">_getStatusConfig</code> mutated <code class="inline">this.props</code>
+      directly and called <code class="inline">this.render()</code> — an anti-pattern in Odoo's
+      OWL framework that fights the reactivity system instead of using it. The fix replaces
+      prop-mutation with a proper <code class="inline">useState</code> object, letting OWL's own
+      reactivity re-render the popup when confirmation counts change.
+    </p>
+
+    <div class="tech-stack">
+      <span class="tech-pill"><span class="dot dot-green"></span>Odoo 18 payment.provider</span>
+      <span class="tech-pill"><span class="dot dot-green"></span>OWL (Odoo Web Library)</span>
+      <span class="tech-pill"><span class="dot dot-amber"></span>python-monero</span>
+      <span class="tech-pill"><span class="dot dot-amber"></span>monero-wallet-rpc / monerod</span>
+      <span class="tech-pill"><span class="dot dot-blue"></span>qrcode (Python)</span>
+      <span class="tech-pill"><span class="dot dot-blue"></span>requests + CoinGecko API</span>
+      <span class="tech-pill"><span class="dot dot-violet"></span>Decimal arithmetic</span>
+      <span class="tech-pill"><span class="dot dot-violet"></span>HMAC-SHA256 payment proofs</span>
+      <span class="tech-pill"><span class="dot dot-red"></span>PostgreSQL row locking</span>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 5B: VERSION STRATEGY ═══ -->
+  <section>
+    <div class="section-kicker">Version Strategy</div>
+    <h2>Why Odoo 18, and Not the Newer Odoo 19</h2>
+
+    <p>
+      The current rewrite of <code class="inline">payment_monero_rpc</code> was carried out
+      against Odoo 18 — a version that was already a year old, and whose support window was
+      well understood, at the time the module was upgraded to it in April 2025. Odoo 19 did not
+      exist yet: it shipped later that year, unveiled at the Odoo Experience conference in
+      Brussels on 18–20 September 2025 and generally released the following month, October 2025.
+      Odoo follows a strict annual October release cadence and supports only its three most
+      recent major versions at any given time — each version gets roughly three years of bug
+      fixes and security patches from its release date before it falls out of support, which is
+      exactly the pattern that took Odoo 15 (released November 2021) out of support in October
+      2024, the same month Odoo 18 launched.
+    </p>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-num stat-blue">Oct 2024</div>
+        <div class="stat-label">Odoo 18 released</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-amber">Oct 2025</div>
+        <div class="stat-label">Odoo 19 released</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-emerald">17 · 18 · 19</div>
+        <div class="stat-label">Currently supported (Jul 2026)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-red">~2027</div>
+        <div class="stat-label">Odoo 18's expected EOL</div>
+      </div>
+    </div>
+
+    <p>
+      That timeline matters for a decision the manifest file makes explicit. Inside
+      <code class="inline">__manifest__.py</code>, the live <code class="inline">"version"</code>
+      key is pinned to <code class="inline">"18.0.0.0.3"</code>, while a commented-out line sits
+      directly above it — <code class="inline">#"version": "19.0.0.0.3", for v19</code> — alongside
+      a second commented note explaining that the <code class="inline">post_init_hook</code> entry
+      would need to be removed to run on v19. In other words, the v19 migration path is already
+      scouted and partially prepared in the source; it just hasn't been thrown as the default
+      switch yet.
+    </p>
+
+    <div class="callout callout-warn">
+      <div class="callout-icon">🧪</div>
+      <div class="callout-body">
+        <strong>Fact-check: is that caution justified?</strong>
+        <p>Yes, at least as a near-term call. As of mid-2026, Odoo 19 is still inside its first
+        year in the field, and public bug trackers and user forums reflect the rough edges typical
+        of a first-year major release: reported post-upgrade regressions around phone-number
+        fields, mail templates, outgoing email, and Peppol e-invoicing; a product-variant pricing
+        bug where a selected variant's price fails to update on the e-commerce storefront; and a
+        wider catalogue of reported defects spanning Accounting, Website performance, Inventory
+        serial-number uniqueness, Sales quote responsiveness, POS receipt formatting, HR approval
+        routing, Project Gantt interactions, Manufacturing timers, and CRM lead enrichment. None
+        of this is unusual for a release still in its stabilisation period — third-party trackers
+        following the pattern have pointed to Odoo 19 reaching a more settled "maturity point"
+        only around the middle of 2026 — but it is a reasonable basis for a payment-processing
+        module, where correctness bugs have direct financial consequences, to stay one version
+        behind the bleeding edge.</p>
+      </div>
+    </div>
+
+    <p>
+      This is not a claim that Odoo 18 is somehow exempt from the same dynamic — every major
+      version ships its own first-year rough patches, and Odoo 18 was no exception when it was
+      new. The difference is simply elapsed time: by the point this module targeted it, Odoo 18
+      had already absorbed roughly six months of stable-branch bug fixes, whereas Odoo 19 is
+      still accumulating its own. Odoo 18 is not in any EOL emergency either — with the three
+      most recent major versions (17, 18, and 19) all under active support as of mid-2026, and
+      Odoo 18's own support window not expected to close until roughly 2027 when Odoo 21 ships,
+      there was no support-driven urgency to jump straight to 19. The commented-out version line
+      in the manifest is the honest version of that decision: the module is ready to move to 19
+      once its ecosystem — and the third-party Python and JavaScript dependencies this module
+      leans on — have had a full year to settle, not because 18 was running out of runway.
+    </p>
+  </section>
+
+  <!-- ═══ SECTION 6: SECURITY HARDENING ═══ -->
+  <section>
+    <div class="section-kicker">Security Analysis</div>
+    <h2>164 Issues, Three Passes, One 5.0-Rated Module</h2>
+
+    <p>
+      Rather than a single ad-hoc review, the codebase went through a documented three-pass audit
+      spanning every model, the website and POS controllers, both frontend JavaScript files, the
+      manifest, and the test suite. Each pass produced a written severity-tagged issue list and a
+      corresponding fix; the full 357-line report ships in the repository as
+      <code class="inline">monero_code_review_final.md</code>.
+    </p>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-num stat-red">124</div>
+        <div class="stat-label">Pass 1 · 3.0/5</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-amber">25</div>
+        <div class="stat-label">Pass 2 · 4.5/5</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-blue">15</div>
+        <div class="stat-label">Pass 3 · 4.8/5</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-emerald">164</div>
+        <div class="stat-label">Total · 5.0/5</div>
+      </div>
+    </div>
+
+    <p>
+      Of the 32 critical/high-severity issues resolved across all three passes, a few stand out
+      as the kind of bug that would have caused real financial or security damage in production:
+    </p>
+
+    <div class="compare-cards">
+      <div class="compare-header">
+        <div class="compare-header-cell">File</div>
+        <div class="compare-header-cell">🔴 Before</div>
+        <div class="compare-header-cell">🟢 After</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">controllers/main.py</div>
+        <div class="compare-cell bad">access_token accepted as a parameter but never checked — a complete auth bypass on payment creation and QR code retrieval</div>
+        <div class="compare-cell good">hmac.compare_digest() timing-safe check enforced before any order lookup, payment creation, or QR response</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">monero_payment.py</div>
+        <div class="compare-cell bad">self._payment_confirmed(self, values) — self passed twice; no lock on concurrent status checks</div>
+        <div class="compare-cell good">Corrected call signature; SELECT ... FOR UPDATE NOWAIT row lock plus a terminal-state guard</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">payment_provider.py</div>
+        <div class="compare-cell bad">monero.daemon.Daemon(...) — NameError at runtime, the class was never imported under that path</div>
+        <div class="compare-cell good">Uses the correctly imported Daemon class from monero.daemon</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">payment_form_monero.js</div>
+        <div class="compare-cell bad">RPC payload built for checkout omitted access_token entirely — every real payment attempt was rejected server-side</div>
+        <div class="compare-cell good">access_token read from the page and included in every payment RPC call</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">res_config_settings.py</div>
+        <div class="compare-cell bad">ValidationError referenced but never imported; validation ran after super().set_values() had already persisted bad data</div>
+        <div class="compare-cell good">Import added; URL validation moved before the persisting super() call</div>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <div class="callout-icon">📊</div>
+      <div class="callout-body">
+        <strong>Where the issues concentrated</strong>
+        <p><code class="inline">monero_payment.py</code> (35 issues) and
+        <code class="inline">controllers/main.py</code> (23 issues) accounted for over a third of
+        everything found — unsurprising, since between them they hold the confirmation state
+        machine and every externally reachable HTTP endpoint. Test files
+        (<code class="inline">test_sales_order.py</code>, <code class="inline">test_controllers.py</code>,
+        <code class="inline">test_payment_provider.py</code>) contributed another 24, including
+        assertions that checked for invalid states like <code class="inline">'done'</code> and
+        <code class="inline">'paid'</code> that the state machine could never actually produce.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 7: HONEST ASSESSMENT ═══ -->
+  <section>
+    <div class="section-kicker">Honest Assessment</div>
+    <h2>What Was Fixed, and What Was Consciously Left Alone</h2>
+
+    <p>
+      Not every issue found in the audit was resolved by rewriting code. Four items were
+      deliberately documented as accepted technical debt rather than fixed outright, because
+      closing them properly would require a database migration or an infrastructure change
+      outside the module's scope:
+    </p>
+
+    <div class="callout callout-warn">
+      <div class="callout-icon">🔢</div>
+      <div class="callout-body">
+        <strong>XMR amounts stored as fields.Float</strong>
+        <p>Monero has 12 decimal places of precision; IEEE 754 doubles carry roughly 15–17
+        significant digits, which is sufficient for amounts under ~1000 XMR but not a permanent
+        guarantee. All comparisons and signature generation already convert through
+        <code class="inline">Decimal</code>; the stored field itself is flagged for a future
+        migration to an <code class="inline">Integer</code> piconero column with a
+        <code class="inline">fields.Monetary</code> display layer.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-warn">
+      <div class="callout-icon">🔐</div>
+      <div class="callout-body">
+        <strong>RPC and wallet passwords stored in plaintext</strong>
+        <p>Odoo's <code class="inline">password=True</code> field option only masks the value in
+        the UI — the database column itself is unencrypted, and the same credential is
+        additionally duplicated into <code class="inline">ir.config_parameter</code>. Documented
+        as medium risk (it requires database read access to exploit) with a recommended future
+        migration to environment variables or a secrets manager.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-warn">
+      <div class="callout-icon">🧭</div>
+      <div class="callout-body">
+        <strong>Subaddress orphaning on a database rollback</strong>
+        <p>If a subaddress is generated on the wallet but the subsequent Odoo transaction rolls
+        back, the wallet has an address with no corresponding payment record. Low risk, but it
+        requires a periodic wallet-reconciliation job to detect and re-associate orphaned
+        addresses — noted as a recommended future addition rather than built now.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-warn">
+      <div class="callout-icon">⏱️</div>
+      <div class="callout-body">
+        <strong>Exchange rate cache is a single shared value</strong>
+        <p>The 60-second CoinGecko rate cache lives in a single <code class="inline">ir.config_parameter</code>
+        row, so under multi-worker load there's a brief window where two workers could compute
+        slightly different fiat conversions. Documented as low risk; a future fix would move this
+        to Redis or add pessimistic locking around the cache write.</p>
+      </div>
+    </div>
+
+    <p>
+      This kind of explicit debt-tracking — rather than silence — is arguably the most valuable
+      output of the audit. A merchant deploying this module can read the accepted-risk table and
+      make an informed call about whether stagenet testing is sufficient, or whether the
+      float-precision and plaintext-password items need to be closed before mainnet production
+      use at scale.
+    </p>
+  </section>
+
+  <!-- ═══ SECTION 8: CONCLUSION ═══ -->
+  <section>
+    <div class="section-kicker">Conclusion</div>
+    <h2>What a Self-Custodied Payment Gateway Should Look Like</h2>
+
+    <p>
+      <code class="inline">payment_monero_rpc</code> answers a fairly narrow but important
+      question: can an ERP accept a privacy-preserving cryptocurrency without introducing a new
+      trusted third party into the payment path? The module's answer is yes — at the cost of the
+      merchant running their own daemon and wallet RPC infrastructure, in exchange for never
+      handing a payment processor visibility into order amounts, customer identities, or
+      transaction timing.
+    </p>
+
+    <p>
+      What makes it worth studying beyond its feature list is the audit trail sitting alongside
+      it. A three-pass, 164-issue review that starts at 3.0/5 and documents its way to 5.0/5 — with
+      every fix traceable to a specific issue number, and every piece of remaining risk written
+      down rather than hidden — is a more honest account of software quality than a green
+      "production-ready" badge on a README.
+    </p>
+
+    <div class="pull-quote">
+      <p>Security work that isn't documented didn't happen, as far as the next reviewer is
+      concerned. A fix without a paper trail is indistinguishable from a bug nobody noticed yet.</p>
+      <cite>— audit methodology note</cite>
+    </div>
+
+    <p>
+      The module's origins trace to the Monero Integrations project's earlier
+      <code class="inline">monero-rpc-odoo</code> and <code class="inline">monero-rpc-odoo-pos</code>
+      addons for Odoo 14; this Odoo 18 rewrite unifies both into one installable app, submitted
+      upstream as a pull request for review by the wider Monero Integrations maintainer group.
+    </p>
+  </section>
+
+  <!-- ═══ FOOTER ═══ -->
+  <footer class="article-footer">
+    <div class="footer-left">
+      <p>SOURCE REPOSITORY</p>
+      <p style="margin-bottom: 12px; color: var(--muted-hi)">github.com/niyid/moneroodoo · upstream: monero-integrations/moneroodoo</p>
+      <p>LICENCE · LGPL-3</p>
+    </div>
+    <a class="footer-link" href="https://github.com/niyid/moneroodoo" target="_blank">
+      ↗ View on GitHub
+    </a>
+  </footer>
+
+</div>
+</body>
+</html>

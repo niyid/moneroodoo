@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: payment_form_monero_es6.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: payment_form_monero_es6.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * @module MoneroPaymentForm
+ * ES6 module for integrating Monero payments into web checkout flows.
+ */
+
+const DEBUG_TAG = "[MoneroPayment]";
+
+/**
+ * @constant {string}
+ */
+const MONERO_PAYMENT_TEMPLATE = `
+&lt;div id="wrap">
+    &lt;div class="oe_website_sale o_website_sale_checkout container py-2">
+        &lt;div class="container mt-4 light-mode">
+            &lt;div class="row justify-content-center">
+                &lt;div class="col-md-12 text-center">
+                    &lt;h2>Pay with Monero&lt;/h2>
+                    &lt;div class="alert" id="payment_status_alert">
+                        &lt;h4>&lt;span id="payment_amount_str">&lt;/span> XMR&lt;/h4>
+                    &lt;/div>
+                    &lt;div class="mb-4 border p-3">
+                        &lt;img id="qr_code_img" class="img-fluid" style="max-width: 250px" alt="Monero QR Code"/>
+                    &lt;/div>
+                    &lt;div class="alert" id="payment_status_message">
+                        &lt;span id="status_message">&lt;/span>
+                        &lt;div id="status_check_container" style="display:none">
+                            &lt;a href="#" class="btn btn-sm btn-primary" id="check_status_btn">
+                                Check Payment Status
+                            &lt;/a>
+                        &lt;/div>
+                    &lt;/div>
+                    &lt;div class="text-left border-top pt-3">
+                        &lt;h5>How to Pay:&lt;/h5>
+                        &lt;ol>
+                            &lt;li>Open your Monero wallet&lt;/li>
+                            &lt;li>Send the exact amount to the address above&lt;/li>
+                            &lt;li>Wait for confirmations&lt;/li>
+                        &lt;/ol>
+                    &lt;/div>
+                &lt;/div>
+            &lt;/div>
+        &lt;/div>
+    &lt;/div>
+&lt;/div>
+`;
+
+/**
+ * Utility functions for HTTP requests and translations
+ */
+class Utils {
+    /**
+     * Make an RPC call to the server
+     * @param {string} endpoint 
+     * @param {Object} data 
+     * @param {Object} options 
+     * @returns {Promise&lt;Object>}
+     */
+    static async rpc(endpoint, data = {}, options = {}) {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': this.getCSRFToken(),
+                ...options.headers
+            },
+            body: JSON.stringify(data),
+            signal: options.timeout ? AbortSignal.timeout(options.timeout) : undefined
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        return await response.json();
+    }
+
+    /**
+     * Get CSRF token from meta tag or cookies
+     * @returns {string}
+     */
+    static getCSRFToken() {
+        // Try meta tag first
+        const metaTag = document.querySelector('meta[name="csrf-token"]');
+        if (metaTag) return metaTag.getAttribute('content');
+
+        // Try cookie
+        const cookies = document.cookie.split(';');
+        for (let cookie of cookies) {
+            const [name, value] = cookie.trim().split('=');
+            if (name === 'csrftoken') return value;
+        }
+
+        return '';
+    }
+
+    /**
+     * Simple translation function (can be replaced with i18n library)
+     * @param {string} text 
+     * @returns {string}
+     */
+    static translate(text) {
+        // This is a placeholder - replace with actual translation logic
+        const translations = {
+            "Pay with Monero": "Pay with Monero",
+            "Pay Now": "Pay Now",
+            "Payment Error": "Payment Error",
+            "OK": "OK"
+        };
+        return translations[text] || text;
+    }
+
+    /**
+     * Load external JavaScript
+     * @param {string} src 
+     * @returns {Promise&lt;void>}
+     */
+    static loadJS(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    /**
+     * Show a modal dialog
+     * @param {string} title 
+     * @param {string} message 
+     */
+    static showDialog(title, message) {
+        // Simple alert - can be replaced with modal library
+        alert(`${title}: ${message}`);
+    }
+
+    /**
+     * Block UI (show loading)
+     */
+    static blockUI() {
+        document.body.style.cursor = 'wait';
+        document.body.classList.add('loading');
+    }
+
+    /**
+     * Unblock UI (hide loading)
+     */
+    static unblockUI() {
+        document.body.style.cursor = '';
+        document.body.classList.remove('loading');
+    }
+}
+
+/**
+ * The Monero Payment Form class integrates Monero payments into web checkout pages.
+ */
+export class MoneroPaymentForm {
+    /**
+     * Create a MoneroPaymentForm instance
+     * @param {string|Element} selector - CSS selector or DOM element
+     */
+    constructor(selector) {
+        console.debug(`${DEBUG_TAG} Initializing payment form widget`);
+        
+        this.element = typeof selector === 'string' ? document.querySelector(selector) : selector;
+        if (!this.element) {
+            throw new Error(`Element not found: ${selector}`);
+        }
+
+        this.moneroPaymentContainer = null;
+        this.clipboard = null;
+        this.statusCheckInterval = null;
+        this.moneroSelected = false;
+        this.currentPaymentId = null;
+        this.submitButton = null;
+
+        // Bind methods to maintain context
+        this._boundOnSubmitPayment = this._onSubmitPayment.bind(this);
+        this._boundOnPaymentMethodSelected = this._onPaymentMethodSelected.bind(this);
+    }
+
+    /**
+     * Initialize the payment form
+     * @returns {Promise&lt;void>}
+     */
+    async init() {
+        try {
+            // Load dependencies
+            await Promise.allSettled([
+                Utils.loadJS('/payment_monero_rpc/static/src/js/clipboard.min.js')
+                    .catch(e => console.error(`${DEBUG_TAG} Failed to load clipboard.js:`, e))
+            ]);
+
+            this._setupEventListeners();
+            this._handleInitialSelection();
+            
+            console.debug(`${DEBUG_TAG} Payment form initialized successfully`);
+        } catch (error) {
+            console.error(`${DEBUG_TAG} Initialization failed:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set up event listeners
+     * @private
+     */
+    _setupEventListeners() {
+        // Find submit button
+        this.submitButton = document.querySelector('button[name="o_payment_submit_button"]') ||
+                           this.element.querySelector('button[type="submit"]');
+
+        if (this.submitButton) {
+            this.submitButton.addEventListener('click', this._boundOnSubmitPayment);
+        }
+
+        // Listen for payment method changes
+        const paymentRadios = this.element.querySelectorAll('input[name="o_payment_radio"]');
+        paymentRadios.forEach(radio => {
+            radio.addEventListener('change', this._boundOnPaymentMethodSelected);
+        });
+    }
+
+    /**
+     * Handle initial payment method selection on page load
+     * @private
+     */
+    _handleInitialSelection() {
+        const selectedRadio = this.element.querySelector('input[name="o_payment_radio"]:checked');
+        if (selectedRadio) {
+            this._onPaymentMethodSelected({ currentTarget: selectedRadio });
+        }
+    }
+
+    /**
+     * Handle payment method selection change
+     * @param {Event} event
+     * @private
+     */
+    _onPaymentMethodSelected(event) {
+        const providerCode = this._getProviderCode(event.currentTarget);
+        this.moneroSelected = (providerCode === 'monero_rpc');
+        this._updatePayButtonText(this.moneroSelected ? Utils.translate("Pay with Monero") : Utils.translate("Pay Now"));
+    }
+
+    /**
+     * Handle form submission for Monero payments
+     * @param {Event} event
+     * @returns {Promise&lt;void>}
+     * @private
+     */
+    async _onSubmitPayment(event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!this.moneroSelected) {
+            // Let other payment methods handle submission
+            return;
+        }
+
+        try {
+            this._disablePaymentForm();
+            const checkedRadio = this.element.querySelector('input[name="o_payment_radio"]:checked');
+            const paymentResponse = await this._processMoneroPayment(checkedRadio);
+
+            if (paymentResponse.error) {
+                throw new Error(paymentResponse.error);
+            }
+            
+            if (!paymentResponse.payment_id) {
+                throw new Error("Invalid payment data received");
+            }
+
+            const paymentData = paymentResponse.payment || {};
+            paymentData.payment_id = paymentResponse.payment_id;
+            await this._displayMoneroPaymentPage(paymentData);
+
+        } catch (error) {
+            console.error(`${DEBUG_TAG} Payment error:`, error);
+            Utils.showDialog(Utils.translate("Payment Error"), error.message);
+            this._enablePaymentForm();
+        }
+    }
+
+    /**
+     * Process Monero payment by making RPC call to the server
+     * @param {Element} radio
+     * @returns {Promise&lt;Object>}
+     * @private
+     */
+    async _processMoneroPayment(radio) {
+        const amountTotal = document.getElementById('amount_total_summary');
+        if (!amountTotal) {
+            throw new Error("Missing order information");
+        }
+
+        const orderId = amountTotal.getAttribute('data-oe-id') || amountTotal.dataset.oeId;
+        if (!orderId) {
+            throw new Error("Missing order ID");
+        }
+
+        const providerId = this._getProviderId(radio);
+        const providerCode = this._getProviderCode(radio);
+
+        const endpoint = `/shop/payment/monero/process/${orderId}`;
+        const response = await Utils.rpc(endpoint, {
+            provider: providerId,
+            provider_code: providerCode,
+            order_sudo: parseInt(orderId),
+            csrf_token: Utils.getCSRFToken(),
+        }, { timeout: 30000 });
+
+        if (!response || !response.payment_id) {
+            throw new Error("Invalid response format");
+        }
+
+        this.currentPaymentId = response.payment_id;
+        return response;
+    }
+
+    /**
+     * Display the Monero payment page
+     * @param {Object} payment
+     * @returns {Promise&lt;void>}
+     * @private
+     */
+    async _displayMoneroPaymentPage(payment) {
+        this._cleanupPaymentContainer();
+
+        this.moneroPaymentContainer = document.createElement('div');
+        this.moneroPaymentContainer.id = 'monero_payment_container';
+        this.moneroPaymentContainer.className = 'monero-payment-container';
+
+        this.element.parentNode.insertBefore(this.moneroPaymentContainer, this.element.nextSibling);
+        this.element.style.display = 'none';
+
+        this.moneroPaymentContainer.innerHTML = MONERO_PAYMENT_TEMPLATE;
+        this._populatePaymentData(payment);
+        await this._setupPaymentEventListeners();
+
+        if (payment.state === 'pending' || payment.state === 'paid_unconfirmed') {
+            this._startStatusChecking(payment.payment_id);
+        }
+    }
+
+    /**
+     * Populate payment data into UI elements
+     * @param {Object} payment
+     * @private
+     */
+    _populatePaymentData(payment) {
+        const amountElement = document.getElementById('payment_amount_str');
+        const addressElement = document.getElementById('seller_address');
+        const referenceElement = document.getElementById('order_reference');
+
+        if (amountElement) amountElement.textContent = payment.amount_str || '';
+        if (addressElement) addressElement.textContent = payment.address_seller || '';
+        if (referenceElement) referenceElement.textContent = payment.order_ref || 'N/A';
+    }
+
+    /**
+     * Set up event listeners for the payment page
+     * @returns {Promise&lt;void>}
+     * @private
+     */
+    async _setupPaymentEventListeners() {
+        const checkStatusBtn = this.moneroPaymentContainer.querySelector('#check_status_btn');
+        if (checkStatusBtn) {
+            checkStatusBtn.addEventListener('click', (event) => {
+                event.preventDefault();
+                this._manualCheckStatus();
+            });
+        }
+    }
+
+    /**
+     * Start periodically checking payment status
+     * @param {string} paymentId
+     * @private
+     */
+    _startStatusChecking(paymentId) {
+        this._stopStatusChecking();
+        const checkInterval = this.moneroPaymentContainer.querySelector('.alert-warning') ? 30000 : 60000;
+        this.statusCheckInterval = setInterval(
+            () => this._checkPaymentStatus(paymentId),
+            checkInterval
+        );
+    }
+
+    /**
+     * Stop checking payment status
+     * @private
+     */
+    _stopStatusChecking() {
+        if (this.statusCheckInterval) {
+            clearInterval(this.statusCheckInterval);
+            this.statusCheckInterval = null;
+        }
+    }
+
+    /**
+     * Manually trigger a payment status check
+     * @private
+     */
+    _manualCheckStatus() {
+        if (this.currentPaymentId) {
+            this._checkPaymentStatus(this.currentPaymentId);
+        }
+    }
+
+    /**
+     * Check the payment status via RPC call
+     * @param {string} paymentId
+     * @returns {Promise&lt;void>}
+     * @private
+     */
+    async _checkPaymentStatus(paymentId) {
+        try {
+            const status = await Utils.rpc(`/shop/payment/monero/status/${paymentId}`, {}, {
+                timeout: 10000
+            });
+
+            if (status.status === 'confirmed' || status.confirmations >= 2) {
+                this._updateStatusDisplay({
+                    status: 'confirmed',
+                    status_message: "Payment confirmed! Thank you for your purchase.",
+                    status_alert_class: "success",
+                    status_icon: "fa-check-circle"
+                });
+                this._stopStatusChecking();
+            }
+        } catch (error) {
+            console.error(`${DEBUG_TAG} Status check failed:`, error);
+        }
+    }
+
+    /**
+     * Update the status display with new data
+     * @param {Object} status
+     * @private
+     */
+    _updateStatusDisplay(status) {
+        const statusMessageEl = this.moneroPaymentContainer.querySelector('#status_message');
+        if (statusMessageEl) {
+            statusMessageEl.textContent = status.status_message;
+        }
+    }
+
+    /**
+     * Clean up the payment container
+     * @private
+     */
+    _cleanupPaymentContainer() {
+        this._stopStatusChecking();
+        
+        if (this.clipboard) {
+            this.clipboard.destroy();
+            this.clipboard = null;
+        }
+        
+        if (this.moneroPaymentContainer) {
+            this.moneroPaymentContainer.remove();
+            this.moneroPaymentContainer = null;
+        }
+        
+        this.element.style.display = '';
+    }
+
+    /**
+     * Update the pay button text
+     * @param {string} text
+     * @private
+     */
+    _updatePayButtonText(text) {
+        if (this.submitButton) {
+            this.submitButton.textContent = text;
+        }
+    }
+
+    /**
+     * Disable the payment form
+     * @private
+     */
+    _disablePaymentForm() {
+        if (this.submitButton) {
+            this.submitButton.disabled = true;
+        }
+        
+        this.element.querySelectorAll('input').forEach(el => el.disabled = true);
+        Utils.blockUI();
+    }
+
+    /**
+     * Enable the payment form
+     * @private
+     */
+    _enablePaymentForm() {
+        if (this.submitButton) {
+            this.submitButton.disabled = false;
+        }
+        
+        this.element.querySelectorAll('input').forEach(el => el.disabled = false);
+        Utils.unblockUI();
+    }
+
+    /**
+     * Get the provider code from a radio button
+     * @param {Element} radio
+     * @returns {string}
+     * @private
+     */
+    _getProviderCode(radio) {
+        return radio.dataset.providerCode;
+    }
+
+    /**
+     * Get the provider ID from a radio button
+     * @param {Element} radio
+     * @returns {number}
+     * @private
+     */
+    _getProviderId(radio) {
+        return parseInt(radio.dataset.providerId);
+    }
+
+    /**
+     * Clean up when instance is destroyed
+     */
+    destroy() {
+        if (this.submitButton) {
+            this.submitButton.removeEventListener('click', this._boundOnSubmitPayment);
+        }
+
+        const paymentRadios = this.element.querySelectorAll('input[name="o_payment_radio"]');
+        paymentRadios.forEach(radio => {
+            radio.removeEventListener('change', this._boundOnPaymentMethodSelected);
+        });
+
+        this._cleanupPaymentContainer();
+        console.debug(`${DEBUG_TAG} Payment form destroyed`);
+    }
+}
+
+// Usage example:
+// const paymentForm = new MoneroPaymentForm('#o_payment_form');
+// await paymentForm.init();
+
+export default MoneroPaymentForm;
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Modules</h3><ul><li><a href="MoneroPaymentForm%250AES6%2520module%2520for%2520integrating%2520Monero%2520payments%2520into%2520web%2520checkout%2520flows.module_.html">MoneroPaymentForm
+ES6 module for integrating Monero payments into web checkout flows.</a></li></ul><h3>Classes</h3><ul><li><a href="MoneroCheckout.html">MoneroCheckout</a></li><li><a href="MoneroPaymentForm%250AES6%2520module%2520for%2520integrating%2520Monero%2520payments%2520into%2520web%2520checkout%2520flows.module_.MoneroPaymentForm.html">MoneroPaymentForm
+ES6 module for integrating Monero payments into web checkout flows..MoneroPaymentForm</a></li><li><a href="MoneroPaymentForm%250AES6%2520module%2520for%2520integrating%2520Monero%2520payments%2520into%2520web%2520checkout%2520flows.module_-Utils.html">Utils</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.4</a> on Sat Sep 06 2025 06:46:09 GMT+0100 (West Africa Standard Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

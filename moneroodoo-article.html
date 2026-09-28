@@ -6,7 +6,7 @@
 <title>No Custodian, No Trust Required: Inside payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo</title>
 
 <!-- SEO -->
-<meta name="description" content="A full technical walkthrough of payment_monero_rpc — an Odoo 18 module that accepts Monero across e-commerce and POS via direct daemon/wallet RPC, subaddress isolation, HMAC-signed payment proofs, and a three-pass, 164-issue security hardening audit.">
+<meta name="description" content="A full technical walkthrough of payment_monero_rpc — an Odoo 18, 19 and 20 module that accepts Monero across e-commerce and POS via direct daemon/wallet RPC, subaddress isolation, HMAC-signed payment proofs, and a three-pass, 164-issue security hardening audit.">
 <meta name="author" content="niyid">
 <meta name="keywords" content="Monero, XMR, Odoo, payment provider, RPC, subaddress, point of sale, e-commerce, cryptocurrency, privacy, open source, code review">
 
@@ -678,7 +678,7 @@
     <div class="hero-meta">
       <span>📦 payment_monero_rpc</span>
       <span class="sep">·</span>
-      <span>🏷️ Odoo 18</span>
+      <span>🏷️ Odoo 18 · 19 · 20</span>
       <span class="sep">·</span>
       <span>⛓️ Monero (XMR)</span>
       <span class="sep">·</span>
@@ -742,7 +742,7 @@
       lineage of Monero addons for Odoo. Two earlier modules — <code class="inline">monero-rpc-odoo</code>
       (a <code class="inline">payment.acquirer</code>-based e-commerce integration for Odoo 14) and
       <code class="inline">monero-rpc-odoo-pos</code> (a companion point-of-sale payment method) —
-      have been merged into a single application built against Odoo 18's newer
+      have been merged into a single application built against Odoo's newer
       <code class="inline">payment.provider</code> framework, following Odoo's own naming
       convention for payment modules. The result installs as one app, registers as
       <em>Monero (RPC)</em> in Odoo's payment provider list, and works across both the website
@@ -1006,8 +1006,20 @@ patch(PaymentScreen.prototype, {
       reactivity re-render the popup when confirmation counts change.
     </p>
 
+    <div class="callout callout-warn">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>This overlay is the Odoo 18 version</strong>
+        <p>
+          Odoo 19 changed the import paths and moved order validation, and Odoo 20 removed the
+          online payment popup it patches. See "One Module, Three Directories" below for what that
+          means for each branch.
+        </p>
+      </div>
+    </div>
+
     <div class="tech-stack">
-      <span class="tech-pill"><span class="dot dot-green"></span>Odoo 18 payment.provider</span>
+      <span class="tech-pill"><span class="dot dot-green"></span>Odoo 18 / 19 / 20 payment.provider</span>
       <span class="tech-pill"><span class="dot dot-green"></span>OWL (Odoo Web Library)</span>
       <span class="tech-pill"><span class="dot dot-amber"></span>python-monero</span>
       <span class="tech-pill"><span class="dot dot-amber"></span>monero-wallet-rpc / monerod</span>
@@ -1019,87 +1031,172 @@ patch(PaymentScreen.prototype, {
     </div>
   </section>
 
-  <!-- ═══ SECTION 5B: VERSION STRATEGY ═══ -->
+  <!-- ═══ SECTION 5B: ONE MODULE, THREE DIRECTORIES ═══ -->
   <section>
-    <div class="section-kicker">Version Strategy</div>
-    <h2>Why Odoo 18, and Not the Newer Odoo 19</h2>
+    <div class="section-kicker">Packaging &amp; Versions</div>
+    <h2>One Module, Three Directories: Odoo 18, 19 and 20</h2>
 
     <p>
-      The current rewrite of <code class="inline">payment_monero_rpc</code> was carried out
-      against Odoo 18 — a version that was already a year old, and whose support window was
-      well understood, at the time the module was upgraded to it in April 2025. Odoo 19 did not
-      exist yet: it shipped later that year, unveiled at the Odoo Experience conference in
-      Brussels on 18–20 September 2025 and generally released the following month, October 2025.
-      Odoo follows a strict annual October release cadence and supports only its three most
-      recent major versions at any given time — each version gets roughly three years of bug
-      fixes and security patches from its release date before it falls out of support, which is
-      exactly the pattern that took Odoo 15 (released November 2021) out of support in October
-      2024, the same month Odoo 18 launched.
+      The earlier version of this article explained why <code class="inline">payment_monero_rpc</code>
+      stayed on Odoo 18. That reasoning is now out of date. Odoo 19 shipped in October 2025, and
+      the <code class="inline">20.0</code> branch of <code class="inline">odoo/odoo</code> is live
+      and reports itself as a final release (<code class="inline">version_info = (20, 0, 0, FINAL, 0)</code>).
+      So the module is now packaged once per Odoo series, and each series was installed and tested
+      on a real Odoo and PostgreSQL instance rather than checked against documentation.
+    </p>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span>repository layout</span>
+        <span class="lang">Tree</span>
+      </div>
+      <div class="code-body">moneroodoo/
+├── addons/
+│   ├── 18.0/  payment_monero_rpc/   payment_monero_rpc-18.0.zip
+│   ├── 19.0/  payment_monero_rpc/   payment_monero_rpc-19.0.zip
+│   └── 20.0/  payment_monero_rpc/   payment_monero_rpc-20.0.zip
+├── legacy/                          monero-rpc-odoo, monero-rpc-odoo-pos (Odoo 14 era)
+├── MIGRATION_NOTES.md               what changed per version, with evidence
+├── TEST_RESULTS.md                  install + test results
+└── README.md</div>
+    </div>
+
+    <p>
+      Each folder is a complete module with its own manifest, security files and tests, plus a
+      ready-to-upload zip. Point your <code class="inline">addons_path</code> at exactly one series,
+      because the technical name is the same in all three. A directory per series keeps each
+      branch readable on its own: the differences touch security groups, access rules, binary
+      fields and the POS overlay, and are not worth hiding behind version checks.
     </p>
 
     <div class="stat-grid">
       <div class="stat-card">
-        <div class="stat-num stat-blue">Oct 2024</div>
-        <div class="stat-label">Odoo 18 released</div>
+        <div class="stat-num stat-blue">38</div>
+        <div class="stat-label">Odoo 18.0 · 0 failed</div>
       </div>
       <div class="stat-card">
-        <div class="stat-num stat-amber">Oct 2025</div>
-        <div class="stat-label">Odoo 19 released</div>
+        <div class="stat-num stat-amber">39</div>
+        <div class="stat-label">Odoo 19.0 · 0 failed</div>
       </div>
       <div class="stat-card">
-        <div class="stat-num stat-emerald">17 · 18 · 19</div>
-        <div class="stat-label">Currently supported (Jul 2026)</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-red">~2027</div>
-        <div class="stat-label">Odoo 18's expected EOL</div>
+        <div class="stat-num stat-emerald">41</div>
+        <div class="stat-label">Odoo 20.0 · 0 failed</div>
       </div>
     </div>
 
     <p>
-      That timeline matters for a decision the manifest file makes explicit. Inside
-      <code class="inline">__manifest__.py</code>, the live <code class="inline">"version"</code>
-      key is pinned to <code class="inline">"18.0.0.0.3"</code>, while a commented-out line sits
-      directly above it — <code class="inline">#"version": "19.0.0.0.3", for v19</code> — alongside
-      a second commented note explaining that the <code class="inline">post_init_hook</code> entry
-      would need to be removed to run on v19. In other words, the v19 migration path is already
-      scouted and partially prepared in the source; it just hasn't been thrown as the default
-      switch yet.
+      Every suite was run with <code class="inline">-i payment_monero_rpc --test-enable</code> on a
+      fresh database against sparse checkouts of the real <code class="inline">18.0</code>,
+      <code class="inline">19.0</code> and <code class="inline">20.0</code> branches. The module
+      installed cleanly on all three. Actually installing it was worth doing: it surfaced bugs that
+      the earlier audit and every static check had missed.
+    </p>
+
+    <h3>What the real install found (all three branches)</h3>
+    <div class="compare-cards">
+      <div class="compare-header">
+        <div class="compare-header-cell">Where</div>
+        <div class="compare-header-cell">🔴 Before</div>
+        <div class="compare-header-cell">🟢 After</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">__init__.py</div>
+        <div class="compare-cell bad">Only <code class="inline">from . import hooks</code>. Odoo looks up <code class="inline">post_init_setup</code> on the package itself, so installation crashed.</div>
+        <div class="compare-cell good">Hooks are imported into the package namespace.</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">hooks.py</div>
+        <div class="compare-cell bad">Hooks declared as <code class="inline">(cr, registry)</code>. Odoo 18, 19 and 20 all call <code class="inline">hook(env)</code>, so this raised <code class="inline">TypeError</code> everywhere.</div>
+        <div class="compare-cell good">Both hooks take a single <code class="inline">env</code>.</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">monero_payment.py</div>
+        <div class="compare-cell bad">The <code class="inline">confirmed</code> state was computed before the transactions were saved, so it read stale confirmation counts.</div>
+        <div class="compare-cell good">Transactions are upserted first; the state is computed from fresh data.</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">payment_provider.py</div>
+        <div class="compare-cell bad"><code class="inline">super()._get_compatible_payment_methods</code> called a method that only exists on <code class="inline">payment.method</code>.</div>
+        <div class="compare-cell good">Falls back safely when there is no parent implementation.</div>
+      </div>
+    </div>
+
+    <p>
+      The test suite needed the same treatment. It patched the unbound <code class="inline">request</code>
+      proxy, tried to patch methods on read-only record instances, used placeholder wallet addresses
+      that failed validation, and never seeded the daemon height that confirmations are computed
+      from. Fixing those turned a suite that errored out into one that means something.
+    </p>
+
+    <h3>19.0: security groups and JSON routes</h3>
+    <p>
+      In Odoo 19, <code class="inline">res.groups.category_id</code> is gone. Groups now point at a
+      <code class="inline">res.groups.privilege</code> record through <code class="inline">privilege_id</code>,
+      and that privilege points at the module category. The 18.0 manifest carried a commented-out
+      workaround file that dropped the category and the record rules. That file was never wired in,
+      and the 19.0 branch removes it in favour of a proper fix. The other 19.0 change is
+      <code class="inline">@route(type='json')</code>, which is now a deprecated alias for
+      <code class="inline">type='jsonrpc'</code>; the four JSON routes were renamed and a regression
+      test pins them.
+    </p>
+
+    <h3>20.0: a larger break</h3>
+    <div class="compare-cards">
+      <div class="compare-header">
+        <div class="compare-header-cell">Area</div>
+        <div class="compare-header-cell">🔴 Odoo 18 / 19</div>
+        <div class="compare-header-cell">🟢 Odoo 20</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Security</div>
+        <div class="compare-cell bad"><code class="inline">ir.model.access.csv</code> plus <code class="inline">&lt;record model="ir.rule"&gt;</code> XML</div>
+        <div class="compare-cell good">One <code class="inline">security/ir.access.csv</code> (<code class="inline">ir.access</code> merges both; rules become rows with a <code class="inline">domain</code>)</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Config parameters</div>
+        <div class="compare-cell bad"><code class="inline">get_param()</code> / <code class="inline">set_param()</code></div>
+        <div class="compare-cell good">Typed <code class="inline">get_str()</code> / <code class="inline">set_str()</code> (and bool, int, float)</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Binary fields</div>
+        <div class="compare-cell bad">Assign base64 bytes to <code class="inline">image_qr</code></div>
+        <div class="compare-cell good">Wrap in <code class="inline">BinaryBytes(...)</code>; reads return a <code class="inline">BinaryValue</code></div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Providers and methods</div>
+        <div class="compare-cell bad"><code class="inline">payment.provider.state</code>; payment methods shared</div>
+        <div class="compare-cell good">A plain <code class="inline">active</code> flag; payment methods belong to one provider</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">POS payment method</div>
+        <div class="compare-cell bad"><code class="inline">use_payment_terminal</code></div>
+        <div class="compare-cell good"><code class="inline">payment_provider</code> (and <code class="inline">_get_terminal_provider_selection</code>)</div>
+      </div>
+    </div>
+
+    <p>
+      The 20.0 views also changed (<code class="inline">t-esc</code> became <code class="inline">t-out</code>,
+      and the provider form was restructured), and core's <code class="inline">odoo/http.py</code>
+      became an <code class="inline">odoo/http/</code> package. The controller imports
+      (<code class="inline">from odoo.http import request, route</code>) still resolve.
     </p>
 
     <div class="callout callout-warn">
-      <div class="callout-icon">🧪</div>
+      <div class="callout-icon">⚠️</div>
       <div class="callout-body">
-        <strong>Fact-check: is that caution justified?</strong>
-        <p>Yes, at least as a near-term call. As of mid-2026, Odoo 19 is still inside its first
-        year in the field, and public bug trackers and user forums reflect the rough edges typical
-        of a first-year major release: reported post-upgrade regressions around phone-number
-        fields, mail templates, outgoing email, and Peppol e-invoicing; a product-variant pricing
-        bug where a selected variant's price fails to update on the e-commerce storefront; and a
-        wider catalogue of reported defects spanning Accounting, Website performance, Inventory
-        serial-number uniqueness, Sales quote responsiveness, POS receipt formatting, HR approval
-        routing, Project Gantt interactions, Manufacturing timers, and CRM lead enrichment. None
-        of this is unusual for a release still in its stabilisation period — third-party trackers
-        following the pattern have pointed to Odoo 19 reaching a more settled "maturity point"
-        only around the middle of 2026 — but it is a reasonable basis for a payment-processing
-        module, where correctness bugs have direct financial consequences, to stay one version
-        behind the bleeding edge.</p>
+        <strong>What has not been verified</strong>
+        <p>
+          The POS frontend. No browser or POS session was run. On 19.0, core moved online-payment
+          validation to <code class="inline">OrderPaymentValidation</code>, so the module's
+          <code class="inline">_isOrderValid</code> override no longer fires and needs retargeting. On
+          20.0 the <code class="inline">OnlinePaymentPopup</code> component no longer exists, so the
+          overlay is not bundled. The server-side POS models install and pass their tests on both.
+          Wallet and daemon calls were mocked; nothing here has talked to a real
+          <code class="inline">monerod</code> or <code class="inline">monero-wallet-rpc</code>, so run
+          stagenet before mainnet.
+        </p>
       </div>
     </div>
-
-    <p>
-      This is not a claim that Odoo 18 is somehow exempt from the same dynamic — every major
-      version ships its own first-year rough patches, and Odoo 18 was no exception when it was
-      new. The difference is simply elapsed time: by the point this module targeted it, Odoo 18
-      had already absorbed roughly six months of stable-branch bug fixes, whereas Odoo 19 is
-      still accumulating its own. Odoo 18 is not in any EOL emergency either — with the three
-      most recent major versions (17, 18, and 19) all under active support as of mid-2026, and
-      Odoo 18's own support window not expected to close until roughly 2027 when Odoo 21 ships,
-      there was no support-driven urgency to jump straight to 19. The commented-out version line
-      in the manifest is the honest version of that decision: the module is ready to move to 19
-      once its ecosystem — and the third-party Python and JavaScript dependencies this module
-      leans on — have had a full year to settle, not because 18 was running out of runway.
-    </p>
   </section>
 
   <!-- ═══ SECTION 6: SECURITY HARDENING ═══ -->
@@ -1254,6 +1351,20 @@ patch(PaymentScreen.prototype, {
       float-precision and plaintext-password items need to be closed before mainnet production
       use at scale.
     </p>
+
+    <div class="callout callout-info">
+      <div class="callout-icon">🧪</div>
+      <div class="callout-body">
+        <strong>A fourth pass: actually running it</strong>
+        <p>
+          The three review passes were static, and a 5.0/5 rating on paper did not mean the module
+          installed. The first real install on Odoo 18 failed because the init hook was never
+          exposed, and the hook signature was wrong on every supported version. Running the suite
+          also exposed a state-machine ordering bug. Reading code and running it catch different
+          things; this module needed both.
+        </p>
+      </div>
+    </div>
   </section>
 
   <!-- ═══ SECTION 8: CONCLUSION ═══ -->
@@ -1287,7 +1398,7 @@ patch(PaymentScreen.prototype, {
     <p>
       The module's origins trace to the Monero Integrations project's earlier
       <code class="inline">monero-rpc-odoo</code> and <code class="inline">monero-rpc-odoo-pos</code>
-      addons for Odoo 14; this Odoo 18 rewrite unifies both into one installable app, submitted
+      addons for Odoo 14; this rewrite unifies both into one installable app, now packaged for Odoo 18, 19 and 20, submitted
       upstream as a pull request for review by the wider Monero Integrations maintainer group.
     </p>
   </section>

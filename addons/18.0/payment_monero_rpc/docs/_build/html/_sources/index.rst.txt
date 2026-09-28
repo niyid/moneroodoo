@@ -1,0 +1,42 @@
+Payment Monero RPC Documentation
+================================
+
+Welcome to Payment Monero RPC's documentation!
+
+This Odoo addon provides Monero cryptocurrency payment functionality through RPC integration.
+
+Contents
+--------
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Payment Monero RPC
+
+   payment_monero_rpc
+
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Module Overview
+
+   modules
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Models
+
+   models
+   
+.. toctree::
+   :maxdepth: 2
+   :caption: JavaScript API
+
+   javascript   
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`
+

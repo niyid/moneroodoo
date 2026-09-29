@@ -4,7 +4,7 @@
 
 This module provides Monero cryptocurrency payment integration for Odoo 19.0 using direct RPC calls to the Monero daemon and wallet.
 
-This branch has been ported from the original Odoo 18.0 module — see ../../MIGRATION_NOTES.md for exactly what changed (security groups, init hooks, route types, POS imports) and why.
+This branch has been ported from the original Odoo 18.0 module — see ../../../MIGRATION_NOTES.md for exactly what changed (security groups, init hooks, route types, POS imports) and why.
 
 ## Key Features
 
@@ -18,7 +18,7 @@ This branch has been ported from the original Odoo 18.0 module — see ../../MIG
 
 ### Odoo 19.0 Compatibility
 
-This branch carries forward the Odoo 18 rewrite described below, with the 19.0-specific fixes documented in ../../MIGRATION_NOTES.md applied on top.
+This branch carries forward the Odoo 18 rewrite described below, with the 19.0-specific fixes documented in ../../../MIGRATION_NOTES.md applied on top.
 
 ### Payment Provider Implementation
 
@@ -38,6 +38,16 @@ The module implements Odoo cron jobs to:
 - Reconcile completed payments with orders
 
 This automation ensures payment integrity and reduces manual verification requirements.
+
+## Documentation
+
+Repository-level documents (paths are relative to this file):
+
+- [`../../../README.md`](../../../README.md): layout and status of the 18.0, 19.0 and 20.0 series
+- [`../../../MIGRATION_NOTES.md`](../../../MIGRATION_NOTES.md): what changed per version, with evidence
+- [`../../../TEST_RESULTS.md`](../../../TEST_RESULTS.md): install and test results
+- [`../../../monero_code_review_final.md`](../../../monero_code_review_final.md): runtime security review (19 findings, all fixed)
+- [`../../../monero_code_review_three_pass.md`](../../../monero_code_review_three_pass.md): original static audit
 
 ## Installation Requirements
 

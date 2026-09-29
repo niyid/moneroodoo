@@ -6,7 +6,9 @@ The module lives at `addons/<version>/payment_monero_rpc/` (with a packaged
 `version_info = (N, 0, 0, FINAL, 0)` in `odoo/release.py`), and each version was **installed
 and its test suite run on a live Odoo + PostgreSQL instance** (see `TEST_RESULTS.md`).
 
-The security review and its 19 fixes are documented in `monero_code_review_final.md`.
+The runtime security review and its 19 fixes are documented in `monero_code_review_final.md`; the
+earlier static three-pass audit (164 issues) is preserved in `monero_code_review_three_pass.md`.
+Paths in both are relative to `addons/<version>/payment_monero_rpc/`.
 
 ## Defects found by really installing the module (all versions)
 

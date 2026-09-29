@@ -3,25 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>No Custodian, No Trust Required: Inside payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo</title>
+<title>No Custodian, No Trust Required: payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo 18, 19 and 20</title>
 
 <!-- SEO -->
-<meta name="description" content="A full technical walkthrough of payment_monero_rpc — an Odoo 18, 19 and 20 module that accepts Monero across e-commerce and POS via direct daemon/wallet RPC, subaddress isolation, HMAC-signed payment proofs, and a three-pass, 164-issue security hardening audit.">
+<meta name="description" content="A technical walkthrough of payment_monero_rpc, the Monero payment module for Odoo 18, 19 and 20: direct daemon and wallet RPC, one subaddress per order, a row-locked payment state machine, the per-version packaging, and what a 164-issue static audit and a 19-finding runtime review changed.">
 <meta name="author" content="niyid">
-<meta name="keywords" content="Monero, XMR, Odoo, payment provider, RPC, subaddress, point of sale, e-commerce, cryptocurrency, privacy, open source, code review">
+<meta name="keywords" content="Monero, XMR, Odoo 18, Odoo 19, Odoo 20, payment provider, RPC, subaddress, point of sale, e-commerce, cryptocurrency, privacy, open source, code review">
 
 <!-- Open Graph (Substack, Facebook, LinkedIn link previews) -->
 <meta property="og:type" content="article">
-<meta property="og:title" content="No Custodian, No Trust Required: Inside payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo">
-<meta property="og:description" content="No payment processor. No API key to a third party. Just Odoo talking directly to your own Monero daemon and wallet — subaddress by subaddress, confirmation by confirmation.">
+<meta property="og:title" content="No Custodian, No Trust Required: payment_monero_rpc, a Direct-RPC Monero Gateway for Odoo 18, 19 and 20">
+<meta property="og:description" content="No payment processor and no third-party API key. Odoo talks directly to your own Monero daemon and wallet, and the module now ships for Odoo 18, 19 and 20.">
 <meta property="og:url" content="https://niyid.github.io/moneroodoo/moneroodoo-article.html">
 <meta property="og:site_name" content="Moneroodoo">
 <meta property="article:author" content="https://github.com/niyid">
 
 <!-- Twitter/X Card -->
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="No Custodian, No Trust Required: Inside payment_monero_rpc">
-<meta name="twitter:description" content="A technical deep-dive into an Odoo module that accepts Monero via direct RPC — subaddress isolation, HMAC payment proofs, and a 164-issue security audit trail.">
+<meta name="twitter:title" content="No Custodian, No Trust Required: payment_monero_rpc for Odoo 18, 19 and 20">
+<meta name="twitter:description" content="A technical walkthrough of an Odoo module that accepts Monero via direct RPC, now packaged for Odoo 18, 19 and 20, with the audit and runtime-review trail behind it.">
 
 <!-- Canonical -->
 <link rel="canonical" href="https://niyid.github.io/moneroodoo/moneroodoo-article.html">
@@ -664,755 +664,546 @@
     .container { padding: 0 16px 64px; }
     .hero { padding: 48px 0 40px; }
   }
+
+  table.matrix { width:100%; border-collapse:collapse; margin:28px 0; font-size:14px; border:1px solid var(--border); background:var(--surface); }
+  table.matrix th { text-align:left; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.06em; color:var(--muted-hi); font-weight:600; padding:12px 14px; border-bottom:1px solid var(--border-hi); background:var(--panel); vertical-align:bottom; }
+  table.matrix td { padding:12px 14px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--muted-hi); }
+  table.matrix tr:last-child td { border-bottom:none; }
+  table.matrix td:first-child { color:var(--text); font-weight:500; white-space:nowrap; }
+  .matrix-wrap { overflow-x:auto; }
+  .compare-cards.neutral .compare-header-cell:nth-child(2), .compare-cards.neutral .compare-header-cell:nth-child(3) { color: var(--blue); }
+  .compare-cell.plain { color: var(--muted-hi); }
 </style>
 </head>
 <body>
 <div class="container">
-
-  <!-- ═══ HERO ═══ -->
   <header class="hero">
-    <div class="hero-eyebrow">Cryptocurrency Payments · Odoo ERP · Code Audit</div>
-
+    <div class="hero-eyebrow">Monero payments · Odoo 18, 19 and 20</div>
     <h1>No Custodian, <span class="italic">No Trust</span> <span class="accent">Required</span></h1>
-
     <div class="hero-meta">
-      <span>📦 payment_monero_rpc</span>
-      <span class="sep">·</span>
-      <span>🏷️ Odoo 18 · 19 · 20</span>
-      <span class="sep">·</span>
-      <span>⛓️ Monero (XMR)</span>
-      <span class="sep">·</span>
-      <span>🔍 Three-Pass Security Audit</span>
+      <span>📦 payment_monero_rpc</span><span class="sep">·</span>
+      <span>🏷️ Odoo 18 · 19 · 20</span><span class="sep">·</span>
+      <span>⛓️ Monero (XMR)</span><span class="sep">·</span>
+      <span>🔍 Static audit + runtime review</span>
     </div>
-
     <p class="hero-lead">
       Every mainstream crypto payment gateway asks a merchant to trust a third party: an API key,
       a hosted checkout page, a company that can freeze funds or leak an order history. The
-      <strong>payment_monero_rpc</strong> module for Odoo takes the opposite approach — it speaks
+      <strong>payment_monero_rpc</strong> module for Odoo takes the opposite approach. It speaks
       directly to a self-hosted Monero daemon and wallet over RPC, generates a fresh subaddress
-      per order, and verifies payment on-chain without a single external party ever seeing a
-      transaction. This is a full technical walkthrough of how it works, and the 164-issue,
-      three-pass audit that hardened it.
+      per order, and verifies payment on-chain without an outside party ever seeing a transaction.
+      The module now supports <strong>Odoo 18, 19 and 20</strong>, packaged as three independent
+      directories. This article walks through how it works, how the three versions differ, and what
+      two security reviews changed.
     </p>
   </header>
-
-  <!-- ═══ SECTION 1: THE PROBLEM ═══ -->
+  <section>
+    <div class="section-kicker">What changed</div>
+    <h2>One Module, Now for Odoo 18, 19 and 20</h2>
+    <p>
+      Until this update the repository held a single Odoo 18 module at its root, with a commented-out
+      19.0 version string in the manifest. It now holds three complete modules, one per Odoo series,
+      under <code class="inline">addons/</code>. Each has its own manifest, security files, tests and a ready-to-upload
+      zip. The older Odoo 14 modules moved to <code class="inline">legacy/</code>.
+    </p>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-num stat-blue">18</div><div class="stat-label">Odoo 18.0 · module 18.0.0.0.3</div></div>
+      <div class="stat-card"><div class="stat-num stat-amber">19</div><div class="stat-label">Odoo 19.0 · module 19.0.1.0.0</div></div>
+      <div class="stat-card"><div class="stat-num stat-emerald">20</div><div class="stat-label">Odoo 20.0 · module 20.0.1.0.0</div></div>
+    </div>
+    <div class="code-block">
+      <div class="code-header"><span>repository layout</span><span class="lang">Tree</span></div>
+      <div class="code-body">moneroodoo/
+├── addons/
+│   ├── <span class="num">18</span>.<span class="num">0</span>/  payment_monero_rpc/   payment_monero_rpc-<span class="num">18</span>.<span class="num">0</span>.zip
+│   ├── <span class="num">19</span>.<span class="num">0</span>/  payment_monero_rpc/   payment_monero_rpc-<span class="num">19</span>.<span class="num">0</span>.zip
+│   └── <span class="num">20</span>.<span class="num">0</span>/  payment_monero_rpc/   payment_monero_rpc-<span class="num">20</span>.<span class="num">0</span>.zip
+├── legacy/                          monero-rpc-odoo, monero-rpc-odoo-pos (Odoo <span class="num">14</span> era)
+├── README.md                        layout, status table, how to install
+├── MIGRATION_NOTES.md               what changed per version, with evidence
+├── TEST_RESULTS.md                  install <span class="kw">and</span> test results, per version
+├── monero_code_review_final.md      runtime review: <span class="num">19</span> findings, all fixed
+├── monero_code_review_three_pass.md original static audit (<span class="num">164</span> issues)
+└── moneroodoo-article.html          <span class="kw">this</span> article</div>
+    </div>
+    <div class="callout callout-warn">
+      <div class="callout-icon">⚠️</div>
+      <div class="callout-body">
+        <strong>Use exactly one series per Odoo install</strong>
+        <p>The technical name is <code class="inline">payment_monero_rpc</code> in all three directories, so only one can be on the addons path at a time: <code class="inline">addons_path = /opt/odoo/moneroodoo/addons/19.0,...</code>. Alternatively upload the zip for your series through Apps, then Import Module.</p>
+      </div>
+    </div>
+    <div class="matrix-wrap"><table class="matrix">
+      <tr><th>Series</th><th>Security definitions</th><th>POS frontend overlay</th><th>Tests (module / Odoo runner total)</th></tr>
+      <tr><td>18.0</td><td>Groups by <code class="inline">category_id</code>; <code class="inline">ir.model.access.csv</code> plus <code class="inline">ir.rule</code> records</td><td>Bundled, original</td><td>65 / 65 (38 shipped + 27 adversarial probes)</td></tr>
+      <tr><td>19.0</td><td>Groups by <code class="inline">privilege_id</code>; same CSV plus <code class="inline">ir.rule</code> records</td><td>Bundled; import paths updated; the <code class="inline">_isOrderValid</code> override is not invoked on 19.0 and needs retargeting</td><td>41 / 41</td></tr>
+      <tr><td>20.0</td><td>Groups by <code class="inline">privilege_id</code>; one <code class="inline">ir.access.csv</code> with a <code class="inline">domain</code> column</td><td>Not bundled (core removed <code class="inline">OnlinePaymentPopup</code>)</td><td>41 / 43 (the runner also executes 2 tests from Odoo's <code class="inline">web</code> module)</td></tr>
+    </table></div>
+    <p>
+      The test figures are the totals recorded in the repository's <code class="inline">TEST_RESULTS.md</code>,
+      taken from Odoo's own runner on fresh installs against PostgreSQL. Only the Monero wallet and
+      daemon RPC transport is mocked. "One Module, Three Directories" below covers exactly what differs
+      between the series.
+    </p>
+  </section>
   <section>
     <div class="section-kicker">The Problem</div>
     <h2>Crypto Checkout Usually Means Trusting Someone Else's Server</h2>
-
     <p>
-      Most Monero payment integrations for e-commerce platforms fall into one of two categories.
-      The first is a hosted gateway: the merchant's site redirects to a third-party checkout page,
-      which holds the wallet keys, sets the price, and reports back "paid" or "not paid" via a
-      webhook the merchant has to trust blindly. The second is a thin API wrapper around a
-      commercial payment processor that happens to support XMR alongside a dozen other coins —
-      convenient, but it reintroduces exactly the kind of custodial intermediary that Monero was
-      built to avoid.
+      Most Monero integrations for e-commerce platforms are one of two things. The first is a hosted
+      gateway: the shop redirects to a third-party checkout page that holds the keys, sets the price
+      and reports "paid" through a webhook the merchant has to trust. The second is a thin wrapper
+      around a commercial processor that supports XMR next to a dozen other coins, which brings back
+      exactly the custodial intermediary Monero was built to avoid.
     </p>
-
     <p>
-      For a merchant who already runs Monero infrastructure — a <code class="inline">monerod</code>
-      daemon and a <code class="inline">monero-wallet-rpc</code> instance — neither option makes
-      sense. The wallet is right there. What's missing is the glue: something that can generate a
-      unique receiving address per order, poll the chain for incoming transfers, apply a
-      confirmation policy, and hand a definitive "paid" signal back to Odoo's sales and
-      point-of-sale flows, without ever touching a third-party server.
+      A merchant who already runs <code class="inline">monerod</code> and <code class="inline">monero-wallet-rpc</code> needs neither. What is
+      missing is the glue: a unique receiving address per order, polling for incoming transfers, a
+      confirmation policy, and a definitive "paid" signal back to Odoo's sales and point-of-sale flows.
     </p>
-
     <div class="callout callout-info">
       <div class="callout-icon">🔑</div>
       <div class="callout-body">
         <strong>The core design constraint</strong>
-        <p>Every Monero amount that moves through this module touches only two systems the
-        merchant already controls: their own Odoo database and their own Monero daemon/wallet
-        RPC endpoints. No API key. No hosted checkout. No webhook from a company that could go
-        offline, get subpoenaed, or simply decide to hold funds.</p>
+        <p>Every Monero amount that moves through this module touches only two systems the merchant already controls: their own Odoo database and their own Monero daemon and wallet RPC endpoints. No API key, no hosted checkout, no webhook from a company that could go offline or hold funds. The one outside call is the exchange-rate lookup (<code class="inline">api.coingecko.com</code> by default, with manual fallback rates configured on the provider), which carries a currency code and no order data.</p>
       </div>
     </div>
   </section>
-
-  <!-- ═══ SECTION 2: THE SOLUTION ═══ -->
   <section>
     <div class="section-kicker">The Solution</div>
     <h2>payment_monero_rpc: A Self-Hosted Bridge Between Odoo and the Monero Network</h2>
-
     <p>
-      <code class="inline">payment_monero_rpc</code> is the current, unified generation of a
-      lineage of Monero addons for Odoo. Two earlier modules — <code class="inline">monero-rpc-odoo</code>
-      (a <code class="inline">payment.acquirer</code>-based e-commerce integration for Odoo 14) and
-      <code class="inline">monero-rpc-odoo-pos</code> (a companion point-of-sale payment method) —
-      have been merged into a single application built against Odoo's newer
-      <code class="inline">payment.provider</code> framework, following Odoo's own naming
-      convention for payment modules. The result installs as one app, registers as
-      <em>Monero (RPC)</em> in Odoo's payment provider list, and works across both the website
-      checkout flow and the point-of-sale register.
+      <code class="inline">payment_monero_rpc</code> is the current generation of a lineage of Monero addons for Odoo.
+      Two earlier modules, <code class="inline">monero-rpc-odoo</code> (a <code class="inline">payment.acquirer</code> integration, version
+      14.0.1.0.2) and <code class="inline">monero-rpc-odoo-pos</code> (a point-of-sale companion), were merged into one
+      application built on Odoo's <code class="inline">payment.provider</code> framework. It installs as one app, registers
+      as a Monero (RPC) provider, and covers both website checkout and the POS register.
     </p>
-
-    <p>
-      Underneath the Odoo integration boilerplate, four architectural decisions do the real work:
-    </p>
-
     <div class="pillars-grid">
-      <div class="pillar pillar-emerald">
-        <span class="pillar-icon">🧩</span>
-        <div class="pillar-name">Isolation</div>
+      <div class="pillar pillar-emerald"><span class="pillar-icon">🧩</span><div class="pillar-name">Isolation</div>
         <h3>One Subaddress Per Order</h3>
-        <p>Every order gets its own Monero subaddress via <code class="inline">wallet.new_address()</code>,
-        so incoming transfers can be matched to a specific order without a shared payment ID —
-        and without leaking that two orders came from the same wallet.</p>
-      </div>
-      <div class="pillar pillar-amber">
-        <span class="pillar-icon">🔌</span>
-        <div class="pillar-name">No Custodian</div>
+        <p>Each order gets its own subaddress from <code class="inline">wallet.new_address()</code>, so incoming transfers match a specific order without a shared payment ID, and two orders are not linkable to the same wallet by an observer.</p></div>
+      <div class="pillar pillar-amber"><span class="pillar-icon">🔌</span><div class="pillar-name">No Custodian</div>
         <h3>Direct Daemon &amp; Wallet RPC</h3>
-        <p>The module talks straight to <code class="inline">monerod</code> and
-        <code class="inline">monero-wallet-rpc</code> using the <code class="inline">monero</code>
-        Python library. There is no third-party checkout server anywhere in the payment path.</p>
-      </div>
-      <div class="pillar pillar-blue">
-        <span class="pillar-icon">🧮</span>
-        <div class="pillar-name">Precision</div>
-        <h3>Decimal-Safe State Machine</h3>
-        <p>Payments move through <code class="inline">pending → partial → paid_unconfirmed →
-        confirmed</code> (or <code class="inline">overpaid / expired / failed</code>), with row
-        locks preventing double-confirmation and terminal-state guards preventing regression.</p>
-      </div>
-      <div class="pillar pillar-violet">
-        <span class="pillar-icon">🖋️</span>
-        <div class="pillar-name">Verifiability</div>
+        <p>The module talks to <code class="inline">monerod</code> and <code class="inline">monero-wallet-rpc</code> through the <code class="inline">monero</code> Python library. No third-party checkout server sits in the payment path.</p></div>
+      <div class="pillar pillar-blue"><span class="pillar-icon">🧮</span><div class="pillar-name">Correctness</div>
+        <h3>A Locked State Machine</h3>
+        <p>Payments move through <code class="inline">pending</code>, <code class="inline">partial</code>, <code class="inline">paid_unconfirmed</code> and <code class="inline">confirmed</code> (or <code class="inline">overpaid</code>, <code class="inline">expired</code>, <code class="inline">failed</code>). Row locks prevent double confirmation and terminal states never regress.</p></div>
+      <div class="pillar pillar-violet"><span class="pillar-icon">🖋️</span><div class="pillar-name">Records</div>
         <h3>HMAC-Signed Payment Proofs</h3>
-        <p>Every confirmed payment can generate a tamper-evident proof — a SHA-256 HMAC over the
-        payment ID, amount received, and address — signed with a server-side key, for disputes
-        or bookkeeping.</p>
-      </div>
+        <p>A confirmed payment can produce a JSON proof whose HMAC-SHA256 signature the merchant can later re-check against their own key. It is tamper-evidence for the merchant's records.</p></div>
     </div>
   </section>
-
-  <!-- ═══ SECTION 3: TECHNICAL DEEP DIVE ═══ -->
   <section>
     <div class="section-kicker">Technical Deep Dive</div>
     <h2>Two RPC Clients, One Model Layer</h2>
-
     <p>
-      The module cleanly separates the two roles a Monero node plays. <code class="inline">MoneroDaemon</code>
-      (<code class="inline">models/monero_daemon.py</code>) is a lightweight status model that
-      periodically polls <code class="inline">monerod</code> for sync height, peer count,
-      difficulty, and network type, and stores a rolling history of snapshots — this is what
-      confirmation counts are calculated against, so it never has to make a live RPC call on
-      every page load. <code class="inline">PaymentProviderMonero</code>
-      (<code class="inline">models/payment_provider.py</code>) extends Odoo's built-in
-      <code class="inline">payment.provider</code> model and owns the wallet-side connection: it
-      builds a <code class="inline">Wallet(JSONRPCWallet(...))</code> client from the configured
-      RPC URL, generates subaddresses, fetches balances, and converts fiat order totals into XMR
-      using a cached exchange rate.
+      The module separates the two roles a Monero node plays. <code class="inline">MoneroDaemon</code>
+      (<code class="inline">models/monero_daemon.py</code>) is a status model, refreshed by cron every five minutes, that records
+      <code class="inline">monerod</code>'s height, connections, difficulty and network and keeps only the latest few snapshots.
+      Confirmation counts read this cache instead of making a live RPC call on every page load.
+      <code class="inline">PaymentProviderMonero</code> (<code class="inline">models/payment_provider.py</code>) extends <code class="inline">payment.provider</code>
+      and owns the wallet side: it builds a <code class="inline">Wallet(JSONRPCWallet(...))</code> client from the configured
+      URL (scheme, host and port are all honoured, so an <code class="inline">https://</code> URL stays TLS), generates
+      subaddresses, and converts fiat totals to XMR.
     </p>
-
     <div class="code-block">
-      <div class="code-header">
-        <span>payment_provider.py — creating a payment from a fiat order total</span>
-        <span class="lang">Python</span>
-      </div>
-      <div class="code-body"><span class="kw">def</span> <span class="fn">_create_monero_from_fiat_payment</span>(<span class="kw">self</span>, order_ref, amount, currency, order_id):
+      <div class="code-header"><span>payment_provider.py — creating a payment from a fiat order total (excerpt, comments shortened)</span><span class="lang">Python</span></div>
+      <div class="code-body"><span class="kw">def</span> _create_monero_from_fiat_payment(<span class="kw">self</span>, order_ref, amount, currency, order_id):
+    <span class="kw">self</span>.ensure_one()
+    order_currency = currency.name <span class="kw">if</span> hasattr(currency, <span class="str">&#x27;name&#x27;</span>) <span class="kw">else</span> currency
     rate = <span class="kw">self</span>.get_xmr_rate(order_currency)
+    <span class="kw">if</span> <span class="kw">not</span> rate:
+        <span class="kw">raise</span> UserError(_(<span class="str">&quot;Could not get exchange rate for %s&quot;</span>) % currency)
+
     wallet = <span class="kw">self</span>._get_wallet_client()
-
     <span class="kw">if</span> <span class="kw">self</span>.use_subaddresses:
-        label = <span class="str">f"Order_{order_ref}"</span>
+        label = <span class="str">f&quot;Order_{order_ref}&quot;</span>
         subaddress = wallet.new_address(label=label)
+        <span class="kw">if</span> <span class="kw">not</span> <span class="kw">self</span>._validate_address(subaddress[<span class="num">0</span>], is_subaddress=<span class="kw">True</span>):
+            <span class="kw">raise</span> UserError(_(<span class="str">&quot;Generated invalid subaddress for current network&quot;</span>))
         payment_values = {
-            <span class="str">'payment_id'</span>: <span class="ty">str</span>(subaddress[<span class="num">1</span>]),  <span class="cm"># subaddress index</span>
-            <span class="str">'address_seller'</span>: subaddress[<span class="num">0</span>],
-            <span class="str">'is_subaddress'</span>: <span class="kw">True</span>,
+            <span class="cm"># payment_id is left unset so create() fills it with secrets.token_hex(32)</span>
+            <span class="str">&#x27;subaddress_index&#x27;</span>: subaddress[<span class="num">1</span>],
+            <span class="str">&#x27;address_seller&#x27;</span>: subaddress[<span class="num">0</span>],
+            <span class="str">&#x27;is_subaddress&#x27;</span>: <span class="kw">True</span>,
         }
-    <span class="cm"># ... integrated-address fallback for legacy payment-ID mode omitted</span>
+    <span class="cm"># ... integrated-address branch for legacy payment-ID mode omitted</span>
 
-    payment = <span class="kw">self</span>.env[<span class="str">'monero.payment'</span>].sudo().create({
+    payment = <span class="kw">self</span>.env[<span class="str">&#x27;monero.payment&#x27;</span>].sudo().create({
         **payment_values,
-        <span class="str">'amount'</span>: <span class="ty">float</span>(Decimal(<span class="ty">str</span>(amount)) / Decimal(<span class="ty">str</span>(rate))),
-        <span class="str">'exchange_rate'</span>: rate,
-        <span class="str">'state'</span>: <span class="str">'pending'</span>,
-        <span class="str">'expiration'</span>: fields.Datetime.add(fields.Datetime.now(), hours=<span class="num">24</span>),
+        <span class="str">&#x27;amount&#x27;</span>: float(Decimal(str(amount)) / Decimal(str(rate))),
+        <span class="str">&#x27;exchange_rate&#x27;</span>: rate,
+        <span class="str">&#x27;currency&#x27;</span>: <span class="str">&#x27;XMR&#x27;</span>,
+        <span class="str">&#x27;order_ref&#x27;</span>: order_ref,
+        <span class="str">&#x27;state&#x27;</span>: <span class="str">&#x27;pending&#x27;</span>,
+        <span class="str">&#x27;expiration&#x27;</span>: fields.Datetime.add(fields.Datetime.now(), hours=<span class="num">24</span>),
+        <span class="str">&#x27;original_amount&#x27;</span>: amount,
+        <span class="str">&#x27;original_currency&#x27;</span>: order_currency,
     })
     <span class="kw">return</span> payment</div>
     </div>
-
     <p>
-      Note the <code class="inline">Decimal(str(amount)) / Decimal(str(rate))</code> conversion —
-      a deliberate choice to avoid the classic float-division bug where two innocuous-looking
-      floating-point numbers silently produce a fiat-to-XMR conversion that's off by a fraction of
-      a piconero. The same pattern appears everywhere money changes representation in this
-      codebase: piconero conversion uses the integer constant
-      <code class="inline">1_000_000_000_000</code> rather than the float literal
-      <code class="inline">1e12</code>, and the HMAC payment-proof signature normalises amounts
-      through <code class="inline">Decimal(...).normalize()</code> before hashing, so the same
-      payment never produces two different signatures depending on how Python happened to render
-      a float that day.
+      Notice what the subaddress index is not used for. It goes into its own <code class="inline">subaddress_index</code>
+      field, while the public lookup key <code class="inline">payment_id</code> is generated by <code class="inline">monero.payment.create()</code>
+      as <code class="inline">secrets.token_hex(32)</code>: 64 random hex characters. An earlier version stored the index
+      itself as the <code class="inline">payment_id</code>, and because the status route looks payments up by that value,
+      anyone could walk it by counting "1", "2", "3". Subaddress mode is the default, so that was the
+      key every normal checkout received.
     </p>
-
-    <div class="pull-quote">
-      <p>Floats are for display. Decimals are for money. The moment an amount crosses from "what
-      the user sees" to "what gets compared, hashed, or persisted," it has to become a Decimal —
-      or the module is one rounding error away from a payment that's confirmed on-chain but
-      rejected by the state machine.</p>
-      <cite>— design principle, monero_payment.py</cite>
-    </div>
+    <p>
+      Money conversion goes through <code class="inline">Decimal(str(amount)) / Decimal(str(rate))</code> so the division
+      does not inherit float error, and the proof signature normalises the amount with
+      <code class="inline">Decimal(...).normalize()</code> before hashing. The honest limit is storage: amounts are Odoo
+      <code class="inline">Float</code> fields at 12 digits, and the model's own field help notes that sub-piconero rounding
+      is possible and that integer piconeros would be the better representation. Received and expected
+      amounts are compared with <code class="inline">float_compare(..., precision_digits=12)</code>.
+    </p>
   </section>
-
-  <!-- ═══ SECTION 4: PAYMENT LIFECYCLE ═══ -->
   <section>
     <div class="section-kicker">End-to-End Flow</div>
     <h2>From Checkout Click to Confirmed On-Chain Payment</h2>
-
     <p>
-      <code class="inline">check_payment_status()</code> on <code class="inline">monero.payment</code>
-      is the workhorse of the module — called from a cron job every few minutes, and on demand
-      when a customer or cashier wants a live status check. Here's the full path a payment takes:
+      <code class="inline">check_payment_status()</code> on <code class="inline">monero.payment</code> is the workhorse. A cron
+      (<code class="inline">_cron_verify_pending_payments</code>) runs it every five minutes over up to 100 unexpired
+      <code class="inline">pending</code>, <code class="inline">partial</code> and <code class="inline">paid_unconfirmed</code> payments, least recently checked first. The
+      customer's payment page also polls the token-keyed status route. The path a payment takes:
     </p>
-
     <div class="flow-diagram">
-      <div class="diagram-title">Payment Lifecycle — monero.payment state machine</div>
+      <div class="diagram-title">Payment lifecycle — the monero.payment state machine</div>
       <div class="flow-steps-list">
-
         <div class="flow-step">
           <div class="flow-step-num step-emerald">1</div>
           <div class="flow-step-content">
-            <strong>Order placed → subaddress generated</strong>
-            <p>A fresh subaddress (or, in legacy mode, an integrated address with a random
-            payment ID) is created and validated against the configured network before the
-            <code class="inline">monero.payment</code> record is written.</p>
+            <strong>Order placed, subaddress generated</strong>
+            <p>The <code class="inline">/shop/payment/monero/process/&lt;order_id&gt;</code> route requires the order's access token. If the order already has an active payment (<code class="inline">pending</code>, <code class="inline">partial</code>, <code class="inline">paid_unconfirmed</code> or <code class="inline">overpaid</code>) it is reused, so a refresh or double-click does not burn another subaddress; a cancelled order gets none. Otherwise a subaddress is created, validated against the provider's network type, and stored with a 24-hour expiry.</p>
           </div>
         </div>
-
         <div class="flow-step">
           <div class="flow-step-num step-blue">2</div>
           <div class="flow-step-content">
             <strong>QR code and address rendered to the customer</strong>
-            <p>A QR payload is computed via an ORM dependency chain and served from the
-            database, not held in the HTTP session — closing a code-path where a QR image blob
-            once lingered in session storage.</p>
+            <p>The <code class="inline">monero:</code> payment URI (address, <code class="inline">tx_amount</code>, description) is computed on the record and encoded into a PNG by the <code class="inline">qrcode</code> library. It is read from the database, never cached in the HTTP session. The payment page and the QR image both require the order's access token; a tokenless request gets a 404.</p>
           </div>
         </div>
-
         <div class="flow-step">
-          <div class="flow-step-num step-amber">3</div>
+          <div class="flow-step-num step-violet">3</div>
           <div class="flow-step-content">
             <strong>Wallet RPC polled for incoming transfers</strong>
-            <p><code class="inline">wallet.incoming()</code> is filtered by subaddress index at
-            the RPC level where the library supports it, falling back to a Python-side filter by
-            address only when it doesn't — avoiding an O(n) scan of the entire wallet history on
-            every poll.</p>
+            <p>The code first asks for <code class="inline">wallet.incoming(account=0, subaddr=N)</code>. The <code class="inline">monero</code> library rejects those keyword arguments with <code class="inline">ValueError</code>, so in practice every poll falls back to <code class="inline">wallet.incoming()</code> and filters by receiving address in Python. That is a full scan of the wallet's incoming history per payment, not an RPC-level filter; it is correct, and worth knowing when sizing a busy shop.</p>
           </div>
         </div>
-
         <div class="flow-step">
-          <div class="flow-step-num step-violet">4</div>
+          <div class="flow-step-num step-amber">4</div>
           <div class="flow-step-content">
             <strong>Row-locked, terminal-state-guarded update</strong>
-            <p>A <code class="inline">SELECT ... FOR UPDATE NOWAIT</code> is taken on the payment
-            row before any write, and any payment already in <code class="inline">confirmed</code>,
-            <code class="inline">expired</code>, or <code class="inline">failed</code> returns
-            immediately — so two concurrent cron workers can never double-confirm the same
-            payment, and a confirmed payment can never regress to pending.</p>
+            <p>A <code class="inline">SELECT ... FOR UPDATE NOWAIT</code> is taken on the payment row before any write, so two workers cannot both confirm the same payment. A payment already <code class="inline">confirmed</code>, <code class="inline">expired</code> or <code class="inline">failed</code> returns immediately. A transient RPC error records the message and timestamp but leaves an active payment where it is, so one bad poll cannot fail a good payment.</p>
           </div>
         </div>
-
         <div class="flow-step">
           <div class="flow-step-num step-red">5</div>
           <div class="flow-step-content">
-            <strong>Confirmation threshold evaluated</strong>
-            <p>Amount received and confirmation count (read from the cached
-            <code class="inline">monero.daemon</code> height, not a fresh RPC call) are compared
-            against the provider's configured threshold to resolve
-            <code class="inline">partial</code>, <code class="inline">paid_unconfirmed</code>,
-            <code class="inline">confirmed</code>, or <code class="inline">overpaid</code>.</p>
+            <strong>Transfers saved first, then the state is resolved</strong>
+            <p>Transactions are upserted before the state is computed, keyed on <code class="inline">(txid, payment_id)</code>. Each transaction's confirmations are the larger of the wallet-reported count and the count derived from the cached daemon height; the payment uses the smallest across its transactions and compares it with the provider threshold (at least 1 is enforced).</p>
           </div>
         </div>
-
         <div class="flow-step">
           <div class="flow-step-num step-emerald">6</div>
           <div class="flow-step-content">
-            <strong>Order confirmed, proof generated, single email sent</strong>
-            <p><code class="inline">_payment_confirmed()</code> writes the final state, links the
-            matching <code class="inline">payment.transaction</code> by
-            <code class="inline">reference</code>, confirms the sale order with
-            <code class="inline">send_email=False</code>, and sends exactly one confirmation
-            email from the payment record's own template — a deliberate fix for an earlier
-            double-email bug.</p>
+            <strong>Order confirmed, one email sent</strong>
+            <p><code class="inline">_payment_confirmed()</code> writes the state, marks the matching <code class="inline">payment.transaction</code> done by reference, confirms the sale order with <code class="inline">send_email=False</code>, and sends one confirmation email from the payment's own template. Failures in the email or chatter post are caught and logged, so nothing after the state write can turn a paid order back into a failed payment.</p>
           </div>
         </div>
-
       </div>
     </div>
-
+    <div class="code-block">
+      <div class="code-header"><span>monero_payment.py — resolving the state (excerpt)</span><span class="lang">Python</span></div>
+      <div class="code-body">all_confirmed = (
+    <span class="kw">self</span>.confirmations &gt;= provider.confirmation_threshold
+    <span class="kw">and</span> amount_compare == <span class="num">0</span>
+)
+new_state = (
+    <span class="str">&#x27;confirmed&#x27;</span>        <span class="kw">if</span> all_confirmed
+    <span class="kw">else</span> <span class="str">&#x27;overpaid&#x27;</span>    <span class="kw">if</span> amount_compare == <span class="num">1</span>
+    <span class="kw">else</span> <span class="str">&#x27;paid_unconfirmed&#x27;</span> <span class="kw">if</span> amount_compare == <span class="num">0</span>
+    <span class="kw">else</span> <span class="str">&#x27;partial&#x27;</span>     <span class="kw">if</span> total_received &gt; <span class="num">0</span>
+    <span class="kw">else</span> <span class="str">&#x27;pending&#x27;</span>
+)</div>
+    </div>
+    <div class="matrix-wrap"><table class="matrix">
+      <tr><th>What the wallet reports</th><th>Resulting state</th></tr>
+      <tr><td>Nothing received</td><td><code class="inline">pending</code></td></tr>
+      <tr><td>Less than expected</td><td><code class="inline">partial</code></td></tr>
+      <tr><td>Exactly the expected amount (to 12 decimals), too few confirmations</td><td><code class="inline">paid_unconfirmed</code></td></tr>
+      <tr><td>Exactly the expected amount, enough confirmations</td><td><code class="inline">confirmed</code>, order confirmed</td></tr>
+      <tr><td>More than expected</td><td><code class="inline">overpaid</code>: never auto-confirms, whatever the confirmation count; a person decides</td></tr>
+      <tr><td>Unpaid or partial past its expiry (cron, every 30 minutes)</td><td><code class="inline">expired</code>; <code class="inline">paid_unconfirmed</code> payments are never expired</td></tr>
+    </table></div>
     <div class="callout callout-good">
       <div class="callout-icon">🛡️</div>
       <div class="callout-body">
-        <strong>Access control on every step</strong>
-        <p>The website controller validates every order lookup against a
-        <code class="inline">hmac.compare_digest</code>-checked access token before it will
-        create a payment, check status, or serve a QR code — closing what was originally a
-        complete bypass where <code class="inline">access_token</code> was accepted as a
-        parameter but never actually verified.</p>
+        <strong>Access control on every route</strong>
+        <p>Creating a payment, the payment page, the QR code, the invoice and the proof all require the order's access token, checked with <code class="inline">hmac.compare_digest</code>. The status poll is keyed by the 64-character <code class="inline">payment_id</code> and returns a generic message on error instead of internal RPC details. The bulk <code class="inline">/verify</code> route is restricted to users in the Monero groups, and the token-gated QR is served with <code class="inline">Cache-Control: private</code>. Funds that arrive after a payment has expired are not recorded; that guard is deliberate, so decide your expiry policy with it in mind.</p>
       </div>
     </div>
   </section>
-
-  <!-- ═══ SECTION 5: POS INTEGRATION ═══ -->
+  <section>
+    <div class="section-kicker">Payment Proofs</div>
+    <h2>What the HMAC Proof Does and Does Not Prove</h2>
+    <p>
+      For a <code class="inline">confirmed</code> payment, <code class="inline">generate_payment_proof()</code> writes a JSON attachment containing the payment ID,
+      address, amount, confirmations, transaction hashes, the lowest block height and a signature. The signature is an
+      HMAC-SHA256 over <code class="inline">payment_id:amount_received:address</code> keyed with <code class="inline">monero.payment_proof_key</code>, which the
+      post-install hook generates once as <code class="inline">secrets.token_hex(32)</code> and stores in <code class="inline">ir.config_parameter</code>. Uninstalling the
+      module keeps the key.
+    </p>
+    <p>
+      Because the key is symmetric and stays on the merchant's server, only the merchant can verify a proof. It shows that a
+      record has not been altered since it was issued; a customer or third party cannot check it independently. The signature covers
+      those three fields only, and the key is stored in plaintext in the database, so back it up: losing it makes old proofs unverifiable.
+    </p>
+  </section>
   <section>
     <div class="section-kicker">Point of Sale</div>
     <h2>The Same Wallet, at the Till</h2>
-
     <p>
-      Because <code class="inline">payment_monero_rpc</code> depends on
-      <code class="inline">point_of_sale</code> and <code class="inline">pos_online_payment</code>,
-      the identical fiat-to-XMR conversion and subaddress logic used on the website checkout is
-      reused inside the POS register. An OWL component,
-      <code class="inline">MoneroPaymentPopup</code>, patches Odoo's
-      <code class="inline">PaymentScreen</code> to detect a payment line whose method is named
-      "Monero RPC," generate the subaddress, render a QR code in-register, and poll for
-      confirmation — with a shorter default expiry window than the e-commerce flow, since a
-      customer standing at a register isn't going to wait 24 hours.
+      On the server side, <code class="inline">models/pos_payment.py</code> extends <code class="inline">pos.payment.method</code> with a linked provider, an
+      <code class="inline">is_monero</code> flag and a QR size, and adds <code class="inline">monero_payment_id</code>, with its status and confirmation count, to
+      <code class="inline">pos.order</code>. The payment itself is created by the same provider method as website checkout. These models install and pass
+      their tests on all three series.
     </p>
-
+    <p>
+      The 18.0 frontend overlay adds <code class="inline">MoneroPaymentPopup</code>, which extends core's <code class="inline">OnlinePaymentPopup</code> and shows the QR code,
+      the XMR amount and a live status, and patches <code class="inline">PaymentScreen</code> to open it and poll the payment on a 60-second interval. The popup
+      closes itself after a hard-coded 15-minute countdown. Status is held in reactive OWL state rather than by mutating props:
+    </p>
     <div class="code-block">
-      <div class="code-header">
-        <span>payment_screen_monero.js — reactive status state, not prop mutation</span>
-        <span class="lang">JavaScript</span>
-      </div>
-      <div class="code-body"><span class="kw">import</span> { Component, Dialog, useState } <span class="kw">from</span> <span class="str">"@odoo/owl"</span>;
-<span class="kw">import</span> { DateTime } <span class="kw">from</span> <span class="str">"luxon"</span>;
-
-patch(PaymentScreen.prototype, {
-    <span class="fn">setup</span>() {
+      <div class="code-header"><span>payment_screen_monero.js — reactive status state (excerpt)</span><span class="lang">JavaScript</span></div>
+      <div class="code-body"><span class="kw">patch</span>(PaymentScreen.prototype, {
+    setup() {
         <span class="kw">super</span>.setup();
-        <span class="kw">this</span>.activeMoneroPayments = <span class="kw">new</span> <span class="ty">Set</span>();
-        <span class="cm">// Reactive state object — not this.props mutation, which OWL forbids</span>
+        <span class="kw">this</span>.notification = useService(<span class="str">&quot;notification&quot;</span>);
+        <span class="kw">this</span>.pos = usePos();
+        <span class="cm">// keep activeMoneroPayments for deduplication</span>
+        <span class="kw">this</span>.activeMoneroPayments = <span class="kw">new</span> Set();
+        <span class="cm">// reactive state for popup display data instead of mutating props</span>
         <span class="kw">this</span>.moneroState = useState({
-            paymentStatusClass: <span class="str">"info"</span>,
-            statusIconClass: <span class="str">"fa-hourglass-half"</span>,
+            paymentStatusClass: <span class="str">&quot;info&quot;</span>,
+            statusIconClass: <span class="str">&quot;fa-hourglass-half&quot;</span>,
+            statusMessage: <span class="str">&quot;&quot;</span>,
+            progressVariant: <span class="str">&quot;info&quot;</span>,
             confirmationCount: <span class="num">0</span>,
         });
     },
+    <span class="cm">// ...</span>
 });</div>
     </div>
-
-    <p>
-      This snippet reflects one of the more instructive bugs found during review: an earlier
-      version of <code class="inline">_getStatusConfig</code> mutated <code class="inline">this.props</code>
-      directly and called <code class="inline">this.render()</code> — an anti-pattern in Odoo's
-      OWL framework that fights the reactivity system instead of using it. The fix replaces
-      prop-mutation with a proper <code class="inline">useState</code> object, letting OWL's own
-      reactivity re-render the popup when confirmation counts change.
-    </p>
-
     <div class="callout callout-warn">
       <div class="callout-icon">⚠️</div>
       <div class="callout-body">
-        <strong>This overlay is the Odoo 18 version</strong>
-        <p>
-          Odoo 19 changed the import paths and moved order validation, and Odoo 20 removed the
-          online payment popup it patches. See "One Module, Three Directories" below for what that
-          means for each branch.
-        </p>
+        <strong>The POS frontend has not been run in a browser</strong>
+        <p>No POS session or browser test has been run on any series, so the POS overlay and the website checkout JavaScript are unverified. On 19.0 core moved online-payment validation to <code class="inline">OrderPaymentValidation.isOrderValid</code>, so this module's <code class="inline">_isOrderValid</code> override is not invoked there and must be retargeted. On 20.0 the popup it extends no longer exists, so the overlay is not bundled. The POS payment method also has a <code class="inline">payment_timeout</code> field (default 180 minutes) that nothing currently reads; payments expire on the provider's 24-hour rule.</p>
       </div>
     </div>
-
-    <div class="tech-stack">
-      <span class="tech-pill"><span class="dot dot-green"></span>Odoo 18 / 19 / 20 payment.provider</span>
-      <span class="tech-pill"><span class="dot dot-green"></span>OWL (Odoo Web Library)</span>
-      <span class="tech-pill"><span class="dot dot-amber"></span>python-monero</span>
-      <span class="tech-pill"><span class="dot dot-amber"></span>monero-wallet-rpc / monerod</span>
-      <span class="tech-pill"><span class="dot dot-blue"></span>qrcode (Python)</span>
-      <span class="tech-pill"><span class="dot dot-blue"></span>requests + CoinGecko API</span>
-      <span class="tech-pill"><span class="dot dot-violet"></span>Decimal arithmetic</span>
-      <span class="tech-pill"><span class="dot dot-violet"></span>HMAC-SHA256 payment proofs</span>
-      <span class="tech-pill"><span class="dot dot-red"></span>PostgreSQL row locking</span>
-    </div>
   </section>
-
-  <!-- ═══ SECTION 5B: ONE MODULE, THREE DIRECTORIES ═══ -->
   <section>
     <div class="section-kicker">Packaging &amp; Versions</div>
     <h2>One Module, Three Directories: Odoo 18, 19 and 20</h2>
-
     <p>
-      The earlier version of this article explained why <code class="inline">payment_monero_rpc</code>
-      stayed on Odoo 18. That reasoning is now out of date. Odoo 19 shipped in October 2025, and
-      the <code class="inline">20.0</code> branch of <code class="inline">odoo/odoo</code> is live
-      and reports itself as a final release (<code class="inline">version_info = (20, 0, 0, FINAL, 0)</code>).
-      So the module is now packaged once per Odoo series, and each series was installed and tested
-      on a real Odoo and PostgreSQL instance rather than checked against documentation.
+      The differences between series touch security groups, access rules, constraints, binary fields and the POS overlay. They are
+      not worth hiding behind version checks, so each series is a readable module of its own, and the Python models are nearly identical:
+      <code class="inline">payment_provider.py</code> and <code class="inline">monero_daemon.py</code> are the same on 18.0 and 19.0, and 19.0 to 20.0 differs by a few dozen lines.
+      Version differences were checked against the real <code class="inline">odoo/odoo</code> sources of the three branches, and each series was installed and tested on a live Odoo and PostgreSQL.
     </p>
-
-    <div class="code-block">
-      <div class="code-header">
-        <span>repository layout</span>
-        <span class="lang">Tree</span>
+    <h3>18.0 to 19.0</h3>
+    <div class="compare-cards neutral">
+      <div class="compare-header"><div class="compare-header-cell">Area</div><div class="compare-header-cell">Odoo 18.0</div><div class="compare-header-cell">Odoo 19.0</div></div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Group categories</div>
+        <div class="compare-cell plain"><code class="inline">category_id</code> on <code class="inline">res.groups</code></div>
+        <div class="compare-cell plain">Removed; groups point to a <code class="inline">res.groups.privilege</code> record through <code class="inline">privilege_id</code></div>
       </div>
-      <div class="code-body">moneroodoo/
-├── addons/
-│   ├── 18.0/  payment_monero_rpc/   payment_monero_rpc-18.0.zip
-│   ├── 19.0/  payment_monero_rpc/   payment_monero_rpc-19.0.zip
-│   └── 20.0/  payment_monero_rpc/   payment_monero_rpc-20.0.zip
-├── legacy/                          monero-rpc-odoo, monero-rpc-odoo-pos (Odoo 14 era)
-├── MIGRATION_NOTES.md               what changed per version, with evidence
-├── TEST_RESULTS.md                  install + test results
-└── README.md</div>
-    </div>
-
-    <p>
-      Each folder is a complete module with its own manifest, security files and tests, plus a
-      ready-to-upload zip. Point your <code class="inline">addons_path</code> at exactly one series,
-      because the technical name is the same in all three. A directory per series keeps each
-      branch readable on its own: the differences touch security groups, access rules, binary
-      fields and the POS overlay, and are not worth hiding behind version checks.
-    </p>
-
-    <div class="stat-grid">
-      <div class="stat-card">
-        <div class="stat-num stat-blue">38</div>
-        <div class="stat-label">Odoo 18.0 · 0 failed</div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">JSON routes</div>
+        <div class="compare-cell plain"><code class="inline">type='json'</code></div>
+        <div class="compare-cell plain"><code class="inline">type='jsonrpc'</code> (the old value is a deprecated alias); four routes changed</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-num stat-amber">39</div>
-        <div class="stat-label">Odoo 19.0 · 0 failed</div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Table constraints</div>
+        <div class="compare-cell plain"><code class="inline">_sql_constraints</code></div>
+        <div class="compare-cell plain">Ignored by Odoo 19, so declared as <code class="inline">models.Constraint</code> attributes; guarded by <code class="inline">tests/test_db_constraints.py</code></div>
       </div>
-      <div class="stat-card">
-        <div class="stat-num stat-emerald">41</div>
-        <div class="stat-label">Odoo 20.0 · 0 failed</div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">POS JavaScript</div>
+        <div class="compare-cell plain">Original import paths</div>
+        <div class="compare-cell plain">Paths for <code class="inline">pos_hook</code>, <code class="inline">make_awaitable_dialog</code> and <code class="inline">OnlinePaymentPopup</code> updated</div>
       </div>
     </div>
-
-    <p>
-      Every suite was run with <code class="inline">-i payment_monero_rpc --test-enable</code> on a
-      fresh database against sparse checkouts of the real <code class="inline">18.0</code>,
-      <code class="inline">19.0</code> and <code class="inline">20.0</code> branches. The module
-      installed cleanly on all three. Actually installing it was worth doing: it surfaced bugs that
-      the earlier audit and every static check had missed.
-    </p>
-
-    <h3>What the real install found (all three branches)</h3>
-    <div class="compare-cards">
-      <div class="compare-header">
-        <div class="compare-header-cell">Where</div>
-        <div class="compare-header-cell">🔴 Before</div>
-        <div class="compare-header-cell">🟢 After</div>
-      </div>
+    <h3>19.0 to 20.0</h3>
+    <div class="compare-cards neutral">
+      <div class="compare-header"><div class="compare-header-cell">Area</div><div class="compare-header-cell">Odoo 19.0</div><div class="compare-header-cell">Odoo 20.0</div></div>
       <div class="compare-row">
-        <div class="compare-cell dim-label">__init__.py</div>
-        <div class="compare-cell bad">Only <code class="inline">from . import hooks</code>. Odoo looks up <code class="inline">post_init_setup</code> on the package itself, so installation crashed.</div>
-        <div class="compare-cell good">Hooks are imported into the package namespace.</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">hooks.py</div>
-        <div class="compare-cell bad">Hooks declared as <code class="inline">(cr, registry)</code>. Odoo 18, 19 and 20 all call <code class="inline">hook(env)</code>, so this raised <code class="inline">TypeError</code> everywhere.</div>
-        <div class="compare-cell good">Both hooks take a single <code class="inline">env</code>.</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">monero_payment.py</div>
-        <div class="compare-cell bad">The <code class="inline">confirmed</code> state was computed before the transactions were saved, so it read stale confirmation counts.</div>
-        <div class="compare-cell good">Transactions are upserted first; the state is computed from fresh data.</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">payment_provider.py</div>
-        <div class="compare-cell bad"><code class="inline">super()._get_compatible_payment_methods</code> called a method that only exists on <code class="inline">payment.method</code>.</div>
-        <div class="compare-cell good">Falls back safely when there is no parent implementation.</div>
-      </div>
-    </div>
-
-    <p>
-      The test suite needed the same treatment. It patched the unbound <code class="inline">request</code>
-      proxy, tried to patch methods on read-only record instances, used placeholder wallet addresses
-      that failed validation, and never seeded the daemon height that confirmations are computed
-      from. Fixing those turned a suite that errored out into one that means something.
-    </p>
-
-    <h3>19.0: security groups and JSON routes</h3>
-    <p>
-      In Odoo 19, <code class="inline">res.groups.category_id</code> is gone. Groups now point at a
-      <code class="inline">res.groups.privilege</code> record through <code class="inline">privilege_id</code>,
-      and that privilege points at the module category. The 18.0 manifest carried a commented-out
-      workaround file that dropped the category and the record rules. That file was never wired in,
-      and the 19.0 branch removes it in favour of a proper fix. The other 19.0 change is
-      <code class="inline">@route(type='json')</code>, which is now a deprecated alias for
-      <code class="inline">type='jsonrpc'</code>; the four JSON routes were renamed and a regression
-      test pins them.
-    </p>
-
-    <h3>20.0: a larger break</h3>
-    <div class="compare-cards">
-      <div class="compare-header">
-        <div class="compare-header-cell">Area</div>
-        <div class="compare-header-cell">🔴 Odoo 18 / 19</div>
-        <div class="compare-header-cell">🟢 Odoo 20</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">Security</div>
-        <div class="compare-cell bad"><code class="inline">ir.model.access.csv</code> plus <code class="inline">&lt;record model="ir.rule"&gt;</code> XML</div>
-        <div class="compare-cell good">One <code class="inline">security/ir.access.csv</code> (<code class="inline">ir.access</code> merges both; rules become rows with a <code class="inline">domain</code>)</div>
+        <div class="compare-cell dim-label">Access rules</div>
+        <div class="compare-cell plain"><code class="inline">ir.model.access.csv</code> plus <code class="inline">ir.rule</code> XML records</div>
+        <div class="compare-cell plain">One <code class="inline">security/ir.access.csv</code>; rules become <code class="inline">domain</code> values on the rows</div>
       </div>
       <div class="compare-row">
         <div class="compare-cell dim-label">Config parameters</div>
-        <div class="compare-cell bad"><code class="inline">get_param()</code> / <code class="inline">set_param()</code></div>
-        <div class="compare-cell good">Typed <code class="inline">get_str()</code> / <code class="inline">set_str()</code> (and bool, int, float)</div>
+        <div class="compare-cell plain"><code class="inline">get_param()</code> / <code class="inline">set_param()</code></div>
+        <div class="compare-cell plain">Typed <code class="inline">get_str()</code> / <code class="inline">set_str()</code></div>
       </div>
       <div class="compare-row">
         <div class="compare-cell dim-label">Binary fields</div>
-        <div class="compare-cell bad">Assign base64 bytes to <code class="inline">image_qr</code></div>
-        <div class="compare-cell good">Wrap in <code class="inline">BinaryBytes(...)</code>; reads return a <code class="inline">BinaryValue</code></div>
+        <div class="compare-cell plain">Base64 bytes assigned to the field</div>
+        <div class="compare-cell plain">Wrapped in <code class="inline">BinaryBytes(...)</code>; reads return a value with <code class="inline">to_base64()</code>; attachments take <code class="inline">raw</code></div>
       </div>
       <div class="compare-row">
-        <div class="compare-cell dim-label">Providers and methods</div>
-        <div class="compare-cell bad"><code class="inline">payment.provider.state</code>; payment methods shared</div>
-        <div class="compare-cell good">A plain <code class="inline">active</code> flag; payment methods belong to one provider</div>
+        <div class="compare-cell dim-label">Provider state</div>
+        <div class="compare-cell plain"><code class="inline">state</code> enabled or disabled</div>
+        <div class="compare-cell plain">A plain <code class="inline">active</code> flag; the shipped provider is inactive</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">Payment methods</div>
+        <div class="compare-cell plain">Shared between providers</div>
+        <div class="compare-cell plain">One per provider (<code class="inline">provider_id</code>); the data file is reordered to match</div>
       </div>
       <div class="compare-row">
         <div class="compare-cell dim-label">POS payment method</div>
-        <div class="compare-cell bad"><code class="inline">use_payment_terminal</code></div>
-        <div class="compare-cell good"><code class="inline">payment_provider</code> (and <code class="inline">_get_terminal_provider_selection</code>)</div>
+        <div class="compare-cell plain"><code class="inline">use_payment_terminal</code>, <code class="inline">_get_payment_terminal_selection</code></div>
+        <div class="compare-cell plain"><code class="inline">payment_provider</code>, <code class="inline">_get_terminal_provider_selection</code></div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-cell dim-label">POS overlay</div>
+        <div class="compare-cell plain">Bundled</div>
+        <div class="compare-cell plain">Not bundled in the manifest</div>
       </div>
     </div>
+    <p>The two changes with the most consequence are the constraint and the access-rule syntax:</p>
+    <div class="code-block">
+      <div class="code-header"><span>monero_transaction.py — the same constraint, 18.0 versus 19.0 and 20.0</span><span class="lang">Python</span></div>
+      <div class="code-body"><span class="cm"># 18.0</span>
+_sql_constraints = [
+    (<span class="str">&#x27;txid_payment_unique&#x27;</span>, <span class="str">&#x27;UNIQUE(txid, payment_id)&#x27;</span>,
+     <span class="str">&#x27;This transaction has already been recorded for this payment!&#x27;</span>),
+]
 
+<span class="cm"># 19.0 and 20.0: _sql_constraints is ignored, so this creates the constraint</span>
+_txid_payment_unique = models.Constraint(
+    <span class="str">&quot;UNIQUE(txid, payment_id)&quot;</span>,
+    <span class="str">&quot;This transaction has already been recorded for this payment!&quot;</span>,
+)</div>
+    </div>
+    <div class="code-block">
+      <div class="code-header"><span>scoping a Monero Admin to Monero providers — 18.0/19.0 record versus 20.0 CSV row</span><span class="lang">XML / CSV</span></div>
+      <div class="code-body">&lt;!-- <span class="num">18</span>.<span class="num">0</span> <span class="kw">and</span> <span class="num">19</span>.<span class="num">0</span>: security/security.xml --&gt;
+&lt;record id=<span class="str">&quot;rule_monero_provider_own&quot;</span> model=<span class="str">&quot;ir.rule&quot;</span>&gt;
+    &lt;field name=<span class="str">&quot;model_id&quot;</span> ref=<span class="str">&quot;payment.model_payment_provider&quot;</span>/&gt;
+    &lt;field name=<span class="str">&quot;groups&quot;</span> eval=<span class="str">&quot;[(4, ref(&#x27;payment_monero_rpc.group_monero_admin&#x27;))]&quot;</span>/&gt;
+    &lt;field name=<span class="str">&quot;domain_force&quot;</span>&gt;[(<span class="str">&#x27;code&#x27;</span>, <span class="str">&#x27;=&#x27;</span>, <span class="str">&#x27;monero_rpc&#x27;</span>)]&lt;/field&gt;
+&lt;/record&gt;
+
+<span class="cm"># 20.0: security/ir.access.csv (id,name,model_id,group_id/id,operation,domain)</span>
+access_payment_provider_monero_admin,payment.provider.monero.admin,payment.provider,payment_monero_rpc.group_monero_admin,cru,<span class="str">&quot;[(&#x27;code&#x27;, &#x27;=&#x27;, &#x27;monero_rpc&#x27;)]&quot;</span></div>
+    </div>
     <p>
-      The 20.0 views also changed (<code class="inline">t-esc</code> became <code class="inline">t-out</code>,
-      and the provider form was restructured), and core's <code class="inline">odoo/http.py</code>
-      became an <code class="inline">odoo/http/</code> package. The controller imports
-      (<code class="inline">from odoo.http import request, route</code>) still resolve.
+      <code class="inline">security/monero_groups.xml</code> exists on 18.0 only. It is an old workaround that the manifest never loads, and it is removed from 19.0 and 20.0.
     </p>
-
+    <h3>Installing and testing</h3>
+    <p>
+      Python packages <code class="inline">monero</code>, <code class="inline">qrcode</code> and <code class="inline">requests</code>; a reachable <code class="inline">monerod</code> and <code class="inline">monero-wallet-rpc</code>; and core
+      <code class="inline">pos_online_payment</code> for POS. The shipped provider is inactive and unpublished with blank credentials, so nothing is live until you configure it, and a stagenet
+      wallet is the right first test. From an Odoo checkout of the matching version, with <code class="inline">addons/&lt;version&gt;</code> on the addons path:
+    </p>
+    <div class="code-block">
+      <div class="code-header"><span>run the module tests</span><span class="lang">Shell</span></div>
+      <div class="code-body">odoo-bin -d test_db -i payment_monero_rpc --test-enable --test-tags /payment_monero_rpc \
+         --without-demo=all --stop-after-init</div>
+    </div>
+  </section>
+  <section>
+    <div class="section-kicker">Security Review</div>
+    <h2>Static Passes First, Then the Runtime Review That Found What They Missed</h2>
+    <p>
+      The original review read the Odoo 18 code without running it: three passes found and fixed 164 issues (124, then 25, then 15), and its rating climbed from
+      3.0 to a final 5.0 out of 5. That report is preserved as <code class="inline">monero_code_review_three_pass.md</code>. The ratings are the static reviewer's; they were never a statement that the module had been run.
+    </p>
+    <p>
+      Then the module was installed on real Odoo and PostgreSQL and driven over real HTTP. That found defects no reading had caught, starting with the first install:
+    </p>
+    <div class="compare-cards neutral">
+      <div class="compare-header"><div class="compare-header-cell">Where</div><div class="compare-header-cell">What was wrong</div><div class="compare-header-cell">Fix</div></div>
+      <div class="compare-row"><div class="compare-cell dim-label">__init__.py</div><div class="compare-cell plain">Only <code class="inline">from . import hooks</code>; Odoo looks the hooks up on the package, so they never ran.</div><div class="compare-cell plain"><code class="inline">from .hooks import post_init_setup, uninstall_hook</code></div></div>
+      <div class="compare-row"><div class="compare-cell dim-label">hooks.py</div><div class="compare-cell plain">Declared as <code class="inline">(cr, registry)</code>; Odoo 18, 19 and 20 call <code class="inline">hook(env)</code>, so install raised <code class="inline">TypeError</code>.</div><div class="compare-cell plain">Both hooks take <code class="inline">env</code>.</div></div>
+      <div class="compare-row"><div class="compare-cell dim-label">monero_payment.py</div><div class="compare-cell plain">The state was computed before the transactions were saved, so a payment could not confirm on the poll that first saw enough confirmations.</div><div class="compare-cell plain">Upsert first, then compute.</div></div>
+      <div class="compare-row"><div class="compare-cell dim-label">payment_provider.py</div><div class="compare-cell plain"><code class="inline">super()._get_compatible_payment_methods</code> called a method that exists only on <code class="inline">payment.method</code>.</div><div class="compare-cell plain">Falls back safely.</div></div>
+    </div>
+    <h3>19 further findings, all fixed on every series</h3>
+    <p>
+      The runtime report, <code class="inline">monero_code_review_final.md</code>, lists 19. Fifteen came from the first real run; four surfaced only because fixing those exposed code that had never executed. They fall into a few groups:
+    </p>
+    <p>
+      <strong>Checkout could not work or could be abused.</strong> Guest checkout raised <code class="inline">AccessError</code> because <code class="inline">payment.provider</code> was read without <code class="inline">sudo()</code>, and behind that a QR image
+      of raw <code class="inline">bytes</code> broke session serialization. The payment page had no access-token check. The process route created a new payment and subaddress on every retry and accepted cancelled orders.
+      The token-gated QR was marked publicly cacheable, and internal RPC details were echoed to anonymous callers.
+    </p>
+    <p>
+      <strong>Payment state could be wrong.</strong> Confirmations depended entirely on the daemon cache, so an empty <code class="inline">monero.daemon</code> table stalled payments at <code class="inline">paid_unconfirmed</code>. One transaction paying two
+      payments only attached to the first. A mail failure after confirmation could flip a paid payment to <code class="inline">failed</code>, and so could a single RPC timeout.
+    </p>
+    <p>
+      <strong>Configuration and access.</strong> The shipped provider was enabled with published credentials and a developer's home path. An <code class="inline">https://</code> RPC URL was silently used over plain HTTP. Address validation ignored the network
+      type, the confirmation threshold could be zero, two crons did the same job, a Monero Admin could edit every provider's credentials, and a Monero Manager could write any POS order.
+    </p>
+    <div class="callout callout-bad">
+      <div class="callout-icon">🔎</div>
+      <div class="callout-body">
+        <strong>The constraints that were never created</strong>
+        <p>Re-running the suites on fresh installs found that on 19.0 and 20.0 the database had no <code class="inline">UNIQUE(payment_id)</code>, no <code class="inline">CHECK(amount &gt; 0)</code> and no <code class="inline">UNIQUE(txid, payment_id)</code>. Odoo 19 and later ignore <code class="inline">_sql_constraints</code>, logging a warning and creating nothing. Every test passed anyway, because none asked the database. They are now <code class="inline">models.Constraint</code> attributes, checked against <code class="inline">pg_constraint</code>. 18.0 was unaffected.</p>
+      </div>
+    </div>
+    <div class="pull-quote">
+      <p>The existing tests all passed regardless, because none of them asserted that a constraint exists.</p>
+      <cite>TEST_RESULTS.md</cite>
+    </div>
+  </section>
+  <section>
+    <div class="section-kicker">Scope &amp; Limits</div>
+    <h2>What Was Fixed, and What Is Still Unverified</h2>
+    <p>
+      Two behaviours look like defects but are intended, and the runtime review now has tests asserting them: overpayments never auto-confirm, and funds arriving after a payment has expired are not recorded.
+      Both are policy choices an administrator should know about.
+    </p>
     <div class="callout callout-warn">
       <div class="callout-icon">⚠️</div>
       <div class="callout-body">
-        <strong>What has not been verified</strong>
-        <p>
-          The POS frontend. No browser or POS session was run. On 19.0, core moved online-payment
-          validation to <code class="inline">OrderPaymentValidation</code>, so the module's
-          <code class="inline">_isOrderValid</code> override no longer fires and needs retargeting. On
-          20.0 the <code class="inline">OnlinePaymentPopup</code> component no longer exists, so the
-          overlay is not bundled. The server-side POS models install and pass their tests on both.
-          Wallet and daemon calls were mocked; nothing here has talked to a real
-          <code class="inline">monerod</code> or <code class="inline">monero-wallet-rpc</code>, so run
-          stagenet before mainnet.
-        </p>
+        <strong>Known gaps</strong>
+        <p>The 27 adversarial probes exist on 18.0 only; 19.0 and 20.0 run their shipped suites plus the constraint tests. No browser or POS session has been run, so the POS and checkout JavaScript are unverified on every series. Wallet and daemon calls are mocked in every test and nothing has talked to a real <code class="inline">monerod</code> or <code class="inline">monero-wallet-rpc</code>, so try stagenet before mainnet. Exchange-rate fetches were blocked in the test sandbox.</p>
       </div>
     </div>
   </section>
-
-  <!-- ═══ SECTION 6: SECURITY HARDENING ═══ -->
-  <section>
-    <div class="section-kicker">Security Analysis</div>
-    <h2>164 Issues, Three Passes, One 5.0-Rated Module</h2>
-
-    <p>
-      Rather than a single ad-hoc review, the codebase went through a documented three-pass audit
-      spanning every model, the website and POS controllers, both frontend JavaScript files, the
-      manifest, and the test suite. Each pass produced a written severity-tagged issue list and a
-      corresponding fix; the full 357-line report ships in the repository as
-      <code class="inline">monero_code_review_final.md</code>.
-    </p>
-
-    <div class="stat-grid">
-      <div class="stat-card">
-        <div class="stat-num stat-red">124</div>
-        <div class="stat-label">Pass 1 · 3.0/5</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-amber">25</div>
-        <div class="stat-label">Pass 2 · 4.5/5</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-blue">15</div>
-        <div class="stat-label">Pass 3 · 4.8/5</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-emerald">164</div>
-        <div class="stat-label">Total · 5.0/5</div>
-      </div>
-    </div>
-
-    <p>
-      Of the 32 critical/high-severity issues resolved across all three passes, a few stand out
-      as the kind of bug that would have caused real financial or security damage in production:
-    </p>
-
-    <div class="compare-cards">
-      <div class="compare-header">
-        <div class="compare-header-cell">File</div>
-        <div class="compare-header-cell">🔴 Before</div>
-        <div class="compare-header-cell">🟢 After</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">controllers/main.py</div>
-        <div class="compare-cell bad">access_token accepted as a parameter but never checked — a complete auth bypass on payment creation and QR code retrieval</div>
-        <div class="compare-cell good">hmac.compare_digest() timing-safe check enforced before any order lookup, payment creation, or QR response</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">monero_payment.py</div>
-        <div class="compare-cell bad">self._payment_confirmed(self, values) — self passed twice; no lock on concurrent status checks</div>
-        <div class="compare-cell good">Corrected call signature; SELECT ... FOR UPDATE NOWAIT row lock plus a terminal-state guard</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">payment_provider.py</div>
-        <div class="compare-cell bad">monero.daemon.Daemon(...) — NameError at runtime, the class was never imported under that path</div>
-        <div class="compare-cell good">Uses the correctly imported Daemon class from monero.daemon</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">payment_form_monero.js</div>
-        <div class="compare-cell bad">RPC payload built for checkout omitted access_token entirely — every real payment attempt was rejected server-side</div>
-        <div class="compare-cell good">access_token read from the page and included in every payment RPC call</div>
-      </div>
-      <div class="compare-row">
-        <div class="compare-cell dim-label">res_config_settings.py</div>
-        <div class="compare-cell bad">ValidationError referenced but never imported; validation ran after super().set_values() had already persisted bad data</div>
-        <div class="compare-cell good">Import added; URL validation moved before the persisting super() call</div>
-      </div>
-    </div>
-
-    <div class="callout callout-info">
-      <div class="callout-icon">📊</div>
-      <div class="callout-body">
-        <strong>Where the issues concentrated</strong>
-        <p><code class="inline">monero_payment.py</code> (35 issues) and
-        <code class="inline">controllers/main.py</code> (23 issues) accounted for over a third of
-        everything found — unsurprising, since between them they hold the confirmation state
-        machine and every externally reachable HTTP endpoint. Test files
-        (<code class="inline">test_sales_order.py</code>, <code class="inline">test_controllers.py</code>,
-        <code class="inline">test_payment_provider.py</code>) contributed another 24, including
-        assertions that checked for invalid states like <code class="inline">'done'</code> and
-        <code class="inline">'paid'</code> that the state machine could never actually produce.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══ SECTION 7: HONEST ASSESSMENT ═══ -->
-  <section>
-    <div class="section-kicker">Honest Assessment</div>
-    <h2>What Was Fixed, and What Was Consciously Left Alone</h2>
-
-    <p>
-      Not every issue found in the audit was resolved by rewriting code. Four items were
-      deliberately documented as accepted technical debt rather than fixed outright, because
-      closing them properly would require a database migration or an infrastructure change
-      outside the module's scope:
-    </p>
-
-    <div class="callout callout-warn">
-      <div class="callout-icon">🔢</div>
-      <div class="callout-body">
-        <strong>XMR amounts stored as fields.Float</strong>
-        <p>Monero has 12 decimal places of precision; IEEE 754 doubles carry roughly 15–17
-        significant digits, which is sufficient for amounts under ~1000 XMR but not a permanent
-        guarantee. All comparisons and signature generation already convert through
-        <code class="inline">Decimal</code>; the stored field itself is flagged for a future
-        migration to an <code class="inline">Integer</code> piconero column with a
-        <code class="inline">fields.Monetary</code> display layer.</p>
-      </div>
-    </div>
-
-    <div class="callout callout-warn">
-      <div class="callout-icon">🔐</div>
-      <div class="callout-body">
-        <strong>RPC and wallet passwords stored in plaintext</strong>
-        <p>Odoo's <code class="inline">password=True</code> field option only masks the value in
-        the UI — the database column itself is unencrypted, and the same credential is
-        additionally duplicated into <code class="inline">ir.config_parameter</code>. Documented
-        as medium risk (it requires database read access to exploit) with a recommended future
-        migration to environment variables or a secrets manager.</p>
-      </div>
-    </div>
-
-    <div class="callout callout-warn">
-      <div class="callout-icon">🧭</div>
-      <div class="callout-body">
-        <strong>Subaddress orphaning on a database rollback</strong>
-        <p>If a subaddress is generated on the wallet but the subsequent Odoo transaction rolls
-        back, the wallet has an address with no corresponding payment record. Low risk, but it
-        requires a periodic wallet-reconciliation job to detect and re-associate orphaned
-        addresses — noted as a recommended future addition rather than built now.</p>
-      </div>
-    </div>
-
-    <div class="callout callout-warn">
-      <div class="callout-icon">⏱️</div>
-      <div class="callout-body">
-        <strong>Exchange rate cache is a single shared value</strong>
-        <p>The 60-second CoinGecko rate cache lives in a single <code class="inline">ir.config_parameter</code>
-        row, so under multi-worker load there's a brief window where two workers could compute
-        slightly different fiat conversions. Documented as low risk; a future fix would move this
-        to Redis or add pessimistic locking around the cache write.</p>
-      </div>
-    </div>
-
-    <p>
-      This kind of explicit debt-tracking — rather than silence — is arguably the most valuable
-      output of the audit. A merchant deploying this module can read the accepted-risk table and
-      make an informed call about whether stagenet testing is sufficient, or whether the
-      float-precision and plaintext-password items need to be closed before mainnet production
-      use at scale.
-    </p>
-
-    <div class="callout callout-info">
-      <div class="callout-icon">🧪</div>
-      <div class="callout-body">
-        <strong>A fourth pass: actually running it</strong>
-        <p>
-          The three review passes were static, and a 5.0/5 rating on paper did not mean the module
-          installed. The first real install on Odoo 18 failed because the init hook was never
-          exposed, and the hook signature was wrong on every supported version. Running the suite
-          also exposed a state-machine ordering bug. Reading code and running it catch different
-          things; this module needed both.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══ SECTION 8: CONCLUSION ═══ -->
   <section>
     <div class="section-kicker">Conclusion</div>
     <h2>What a Self-Custodied Payment Gateway Should Look Like</h2>
-
     <p>
-      <code class="inline">payment_monero_rpc</code> answers a fairly narrow but important
-      question: can an ERP accept a privacy-preserving cryptocurrency without introducing a new
-      trusted third party into the payment path? The module's answer is yes — at the cost of the
-      merchant running their own daemon and wallet RPC infrastructure, in exchange for never
-      handing a payment processor visibility into order amounts, customer identities, or
-      transaction timing.
+      <code class="inline">payment_monero_rpc</code> answers a narrow question: can an ERP accept a privacy-preserving cryptocurrency without adding a trusted third party to the payment path? The answer is yes, at the cost of the merchant running their
+      own daemon and wallet RPC, in exchange for never giving a processor visibility into order amounts, customers or timing. With this update that answer holds for three Odoo series, each installable on its own.
     </p>
-
     <p>
-      What makes it worth studying beyond its feature list is the audit trail sitting alongside
-      it. A three-pass, 164-issue review that starts at 3.0/5 and documents its way to 5.0/5 — with
-      every fix traceable to a specific issue number, and every piece of remaining risk written
-      down rather than hidden — is a more honest account of software quality than a green
-      "production-ready" badge on a README.
+      What makes it worth studying beyond the feature list is the record next to it. A static audit that rated the module 5.0 out of 5, followed by a runtime review that found 19 more defects and a constraint bug on the newer series,
+      is a fair picture of what each kind of review can and cannot see, and the remaining risks are written down rather than hidden.
     </p>
-
-    <div class="pull-quote">
-      <p>Security work that isn't documented didn't happen, as far as the next reviewer is
-      concerned. A fix without a paper trail is indistinguishable from a bug nobody noticed yet.</p>
-      <cite>— audit methodology note</cite>
-    </div>
-
     <p>
-      The module's origins trace to the Monero Integrations project's earlier
-      <code class="inline">monero-rpc-odoo</code> and <code class="inline">monero-rpc-odoo-pos</code>
-      addons for Odoo 14; this rewrite unifies both into one installable app, now packaged for Odoo 18, 19 and 20, submitted
-      upstream as a pull request for review by the wider Monero Integrations maintainer group.
+      The module descends from the Monero Integrations project's <code class="inline">monero-rpc-odoo</code> and <code class="inline">monero-rpc-odoo-pos</code> addons for Odoo 14; this version unifies both into one app for Odoo 18, 19 and 20.
     </p>
   </section>
 
-  <!-- ═══ FOOTER ═══ -->
   <footer class="article-footer">
     <div class="footer-left">
       <p>SOURCE REPOSITORY</p>
       <p style="margin-bottom: 12px; color: var(--muted-hi)">github.com/niyid/moneroodoo · upstream: monero-integrations/moneroodoo</p>
       <p>LICENCE · LGPL-3</p>
     </div>
-    <a class="footer-link" href="https://github.com/niyid/moneroodoo" target="_blank">
-      ↗ View on GitHub
-    </a>
+    <a class="footer-link" href="https://github.com/niyid/moneroodoo" target="_blank">↗ View on GitHub</a>
   </footer>
 
 </div>

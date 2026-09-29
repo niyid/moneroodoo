@@ -37,6 +37,16 @@ The module implements Odoo cron jobs to:
 
 This automation ensures payment integrity and reduces manual verification requirements.
 
+## Documentation
+
+Repository-level documents (paths are relative to this file):
+
+- [`../../../README.md`](../../../README.md): layout and status of the 18.0, 19.0 and 20.0 series
+- [`../../../MIGRATION_NOTES.md`](../../../MIGRATION_NOTES.md): what changed per version, with evidence
+- [`../../../TEST_RESULTS.md`](../../../TEST_RESULTS.md): install and test results
+- [`../../../monero_code_review_final.md`](../../../monero_code_review_final.md): runtime security review (19 findings, all fixed)
+- [`../../../monero_code_review_three_pass.md`](../../../monero_code_review_three_pass.md): original static audit
+
 ## Installation Requirements
 
 - Odoo 18

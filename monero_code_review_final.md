@@ -1,5 +1,10 @@
 # payment_monero_rpc — Code Review (Odoo 18.0, ported to 19.0/20.0)
 
+> **Repository layout.** File paths in this document are relative to
+> `addons/<version>/payment_monero_rpc/`. The 27-probe file `tests/test_zz_audit_probes.py` exists
+> only under `addons/18.0/`. The original static audit this review supersedes is preserved as
+> `monero_code_review_three_pass.md`; per-version test results are in `TEST_RESULTS.md`.
+
 **This is the third version of this document.** The first was a static, read-only review
 (164 issues across three passes, no code executed). The second replaced it after actually
 installing the module on a real Odoo 18.0 + PostgreSQL instance and running it over real HTTP,
@@ -19,8 +24,10 @@ Test code lives in `tests/test_zz_audit_probes.py` (18.0 only — see "Scope of 
 updated because they asserted the old, buggy behavior as correct — see Finding 5) plus 27
 adversarial probes covering every finding below.
 
-**Result on 19.0 / 20.0:** the module's own shipped suite passes on each — 39/39 on 19.0,
-41/41 on 20.0 — confirming the ported fixes don't break anything version-specific. See
+**Result on 19.0 / 20.0:** the module's own shipped suite (39 tests) passes on each, confirming the
+ported fixes don't break anything version-specific. With the two constraint tests added by the
+addendum below, Odoo's runner reports 0 failed of 41 on 19.0 and 0 failed of 43 on 20.0 (which also
+runs 2 tests from Odoo's own `web` module). See
 "Scope of this pass" for exactly what was and wasn't re-verified on these two.
 
 ---
@@ -303,8 +310,8 @@ now reads back as a `BinaryBytes` object needing `.to_base64()` rather than raw 
 column, used for Findings 15 and 16 instead of separate `ir.rule` XML records). Two shipped
 tests needed the same corrections on both versions as on 18.0 (Finding 5's `payment_id`
 assertion; Finding 6's `payment_page` token argument). Both were then installed fresh on their
-own real Odoo (19.0, 20.0) with real PostgreSQL and their own shipped suites re-run: **39/39 on
-19.0, 41/41 on 20.0.** The 27-probe adversarial suite itself was not ported to 19.0/20.0 in this
+own real Odoo (19.0, 20.0) with real PostgreSQL and their own shipped suites re-run: **39 tests,
+all passing, on each of 19.0 and 20.0.** The 27-probe adversarial suite itself was not ported to 19.0/20.0 in this
 pass — their shipped tests confirm the fixes didn't break anything version-specific, but the
 deeper adversarial verification (guest checkout actually succeeding end-to-end, idempotency,
 ACL scoping, etc.) was only directly exercised against 18.0.
@@ -322,3 +329,6 @@ shipped tests passed anyway because none asserted a constraint exists. They are 
 attributes on both versions, verified in `pg_constraint`, and guarded by `tests/test_db_constraints.py`.
 18.0 was unaffected. Finding 3's "database constraint is now scoped to `(txid, payment_id)`" was therefore
 only true on 18.0 until this change.
+
+Re-run totals after this change, from Odoo's own runner on fresh installs: 18.0 0 failed of 65;
+19.0 0 failed of 41; 20.0 0 failed of 43 (39 shipped + 2 constraint tests + 2 `web` module tests).

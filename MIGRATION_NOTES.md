@@ -1,14 +1,17 @@
 # Migration notes — `payment_monero_rpc` 18.0 → 19.0 → 20.0
 
-Everything below was checked against the **real `odoo/odoo` source** of the `18.0`, `19.0`
-and `20.0` branches (each reports `version_info = (N, 0, 0, FINAL, 0)` in `odoo/release.py`),
-and every branch was **installed and its test suite run on a live Odoo + PostgreSQL 16
-instance** (see `TEST_RESULTS.md`).
+The module lives at `addons/<version>/payment_monero_rpc/` (with a packaged
+`payment_monero_rpc-<version>.zip` alongside). Version differences were checked against the
+**real `odoo/odoo` source** of the `18.0`, `19.0` and `20.0` branches (each reports
+`version_info = (N, 0, 0, FINAL, 0)` in `odoo/release.py`), and each version was **installed
+and its test suite run on a live Odoo + PostgreSQL instance** (see `TEST_RESULTS.md`).
 
-## Bugs found by really installing the module (all branches)
+The security review and its 19 fixes are documented in `monero_code_review_final.md`.
 
-These are defects in the original 18.0 code, not version differences. Static checks could
-not see them; the first real install did.
+## Defects found by really installing the module (all versions)
+
+These are defects in the original 18.0 code, not version differences. Static checks could not
+see them; the first real install did.
 
 1. **Hooks were never found.** `__init__.py` only did `from . import hooks`, but Odoo calls
    `getattr(<package>, "post_init_setup")`. Fixed with `from .hooks import post_init_setup, uninstall_hook`.
@@ -26,6 +29,20 @@ not see them; the first real install did.
    `assertRaises`, timezone-aware values written to naive `Datetime` fields, and a flow test
    that never seeded the daemon height confirmations are computed from.
 
+## Security and correctness fixes (all versions)
+
+Full detail, with the reproduction and test for each, is in `monero_code_review_final.md`.
+Highlights that affect how the module behaves:
+
+| Area | Change |
+|---|---|
+| Guest checkout | `.sudo()` on `payment.provider` lookups (guests and cashiers cannot read it); QR image no longer cached in the session (raw `bytes` broke JSON session serialization) |
+| Lookup keys | In subaddress mode (the default) `payment_id` is now a random `secrets.token_hex(32)`; the small sequential subaddress index moved to `subaddress_index` |
+| Routes | `payment_page` requires the order `access_token`; process route reuses an active payment instead of creating a new one per retry and rejects cancelled orders; `/verify` limited to internal Monero groups; generic error text returned to callers; token-gated QR is `Cache-Control: private` |
+| Payment state | `monero.transaction` unique on `(txid, payment_id)`; confirmations use `max(daemon-derived, wallet-reported)`; a transient RPC error no longer marks an active payment `failed`; email/chatter failures cannot undo a confirmed payment |
+| Config | Shipped provider is disabled/unpublished with blank credentials; `https://` RPC URLs stay https; address validation checks network type; confirmation threshold must be >= 1; duplicate cron removed |
+| Access control | Monero Admin scoped to `payment.provider` records with `code = 'monero_rpc'`; Monero Manager scoped to POS orders with a Monero payment |
+
 ## 19.0
 
 | Change | Evidence |
@@ -36,16 +53,17 @@ not see them; the first real install did.
 | `_()` needs `self.env` of the calling frame | test-only stub for directly instantiated controllers |
 
 `security/monero_groups.xml` (the old, never-wired workaround that dropped the category and
-record rules) is removed from 19.0 and 20.0.
+record rules) exists on 18.0 only; it is removed from 19.0 and 20.0. The access-control scoping
+above is done with `ir.rule` records in `security/security.xml` on 18.0 and 19.0.
 
 ## 20.0 (everything in 19.0, plus)
 
 | Change | Evidence / fix |
 |---|---|
-| `ir.rule` and `ir.model.access` merged into **`ir.access`** | `ir_rule.py` gone, `ir_access.py` added; Odoo ships `odoo/upgrade_code/19.4-00-ir-access.py`. Security is now `security/ir.access.csv` (`id,name,model_id,group_id/id,operation,domain`) |
+| `ir.rule` and `ir.model.access` merged into **`ir.access`** | `ir_rule.py` gone, `ir_access.py` added; Odoo ships `odoo/upgrade_code/19.4-00-ir-access.py`. Security is now `security/ir.access.csv` (`id,name,model_id,group_id/id,operation,domain`); the provider and POS-order scoping are the `domain` column on those rows, not separate rule records |
 | `ir.config_parameter.get_param/set_param` removed | typed `get_str/get_bool/get_int/get_float` and `set_*`; module uses `get_str/set_str` |
-| `Binary` fields reject `bytes` | wrap in `BinaryBytes(...)`; reads return `BinaryValue` (`.to_base64()`, `bytes(...)`); attachments use `raw` |
-| `payment.provider.state` → `active` | data file |
+| `Binary` fields reject `bytes` | wrap in `BinaryBytes(...)`; reads return `BinaryValue` (`.to_base64()`, `bytes(...)`); attachments use `raw`. The QR image is base64-encoded for the JSON response with `.to_base64()` |
+| `payment.provider.state` → `active` | data file (shipped provider is `active="False"`) |
 | `payment.method` is per provider (`provider_id`, unique with `code`) | data file reordered |
 | `pos.payment.method.use_payment_terminal` → `payment_provider`; `_get_payment_terminal_selection` → `_get_terminal_provider_selection` | `pos_payment.py` |
 | `t-esc` → `t-out`; provider form xpaths changed | kanban and form views |
@@ -58,6 +76,8 @@ record rules) is removed from 19.0 and 20.0.
   this module's `_isOrderValid` override is **inert on 19.0** and must be retargeted. On
   **20.0** `OnlinePaymentPopup` no longer exists and the overlay is **not bundled**.
   Server-side POS models install and pass tests on both.
+* **Adversarial probes on 19.0 and 20.0.** The 27-probe suite exists on 18.0 only. The ported
+  fixes pass each version's shipped suite, but were not exercised by the probes there.
 * **Live Monero RPC.** Wallet/daemon calls are mocked; nothing talked to a real
   `monerod`/`monero-wallet-rpc`. Exchange-rate fetches were blocked by the sandbox network.
 * **Website checkout in a browser.** Templates render at install; the JS was not exercised.

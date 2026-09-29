@@ -125,11 +125,28 @@ class MoneroWebsiteSale(WebsiteSale):
         except (AccessError, MissingError) as e:
             return {'success': False, 'error': str(e)}
 
-        provider = request.env['payment.provider'].search([('code', '=', 'monero_rpc')], limit=1)
+        # Issue (found via h07) fix: previously nothing checked the order's own
+        # state before creating a payment, so a cancelled order could still get
+        # a brand new Monero payment (and a freshly-issued subaddress) created
+        # against it.
+        if order.state == 'cancel':
+            return {'success': False, 'error': 'This order has been cancelled.'}
+
+        provider = request.env['payment.provider'].sudo().search([('code', '=', 'monero_rpc')], limit=1)
         if not provider:
             return {'success': False, 'error': 'Monero provider not configured'}
 
-        payment = provider._create_monero_from_fiat_payment(
+        # Issue (found via h06) fix: this route was not idempotent -- every call
+        # (a page refresh, a double-click, a browser retry after a slow response)
+        # created a brand new monero.payment record and burned a brand new
+        # subaddress, leaving several live, independent payment requests
+        # outstanding for the same order. Reuse an existing payment that is
+        # still active for this order instead of creating another one.
+        existing = request.env['monero.payment'].sudo().search([
+            ('sale_order_id', '=', order.id),
+            ('state', 'in', ('pending', 'partial', 'paid_unconfirmed', 'overpaid')),
+        ], order='id desc', limit=1)
+        payment = existing or provider._create_monero_from_fiat_payment(
             order.name, order.amount_total, order.currency_id, order)
 
         currencyXmr = request.env['res.currency'].search([('name', '=', 'XMR')], limit=1)
@@ -151,7 +168,6 @@ class MoneroWebsiteSale(WebsiteSale):
             'original_currency': order.currency_id.name,
             'exchange_rate_str': '%.2f' % payment.exchange_rate,
             'payment_id': payment.payment_id,
-            'image_qr': payment.image_qr,
             'expiry_time_str': expiration_str,
             'sale_order_id': order.id,
             'status_alert_class': payment._get_status_alert_class(),
@@ -162,12 +178,29 @@ class MoneroWebsiteSale(WebsiteSale):
             'monero_uri': payment.qr_code_uri or '',
         }
 
-        # Store in session as convenience cache only — payment_page reads DB directly
+        # Store in session as convenience cache only — payment_page reads DB directly.
+        # Issue #1 follow-up / Issue 8 fix: 'image_qr' was previously included here.
+        # payment.image_qr is a Binary field and reads back as raw bytes, which
+        # Odoo's session store JSON-serializes on every write -- json.dumps() cannot
+        # serialize bytes, so this line raised TypeError and broke every guest
+        # checkout attempt outright (this was masked until the sudo() fix above,
+        # since the AccessError fired first and the request never reached here).
+        # It also doesn't need to be here at all: the comment above already says
+        # payment_page reads straight from the DB, and caching binary image data
+        # in the session store is unnecessary bloat regardless.
         request.session['monero_payment_data'] = payment_data
+
+        # image_qr IS included in the JSON response returned to the caller, since
+        # the frontend needs it immediately to render the QR code — base64-decode
+        # it to a plain string first so it's JSON-serializable here too.
+        response_data = dict(payment_data, image_qr=(
+            payment.image_qr.decode('ascii')
+            if isinstance(payment.image_qr, bytes) else (payment.image_qr or '')
+        ))
 
         return {
             "success": True,
-            "payment": payment_data,
+            "payment": response_data,
             "payment_id": payment_data["payment_id"],
         }
 
@@ -216,7 +249,7 @@ class MoneroWebsiteSale(WebsiteSale):
 
             order_id = int(kwargs['order_id'])
             access_token = kwargs['access_token']
-            provider = request.env['payment.provider'].search([('code', '=', 'monero_rpc')], limit=1)
+            provider = request.env['payment.provider'].sudo().search([('code', '=', 'monero_rpc')], limit=1)
 
             # Issue 16: use _validate_order_access (consistent with rest of controller;
             # _verify_access_token may not exist in all Odoo 18 builds)
@@ -315,8 +348,13 @@ class MoneroWebsiteSale(WebsiteSale):
                 'expiry_time_str': payment.expiration.strftime("%Y-%m-%d %H:%M:%S") if payment.expiration else None
             }
         except Exception as e:
+            # Issue 13 fix: str(e) was returned verbatim to the anonymous caller,
+            # which can include internal RPC connection details (hostnames, ports,
+            # stack info) when the underlying error comes from the wallet/daemon
+            # RPC layer. Log the real detail server-side; return a generic message.
+            _logger.error("Payment status check failed for payment %s: %s", payment_id, str(e))
             return {
-                'error': str(e),
+                'error': "Unable to check payment status right now. Please try again shortly.",
                 'status': 'error',
                 'status_message': "Error checking payment status",
                 'status_alert_class': 'danger',
@@ -353,7 +391,12 @@ class MoneroWebsiteSale(WebsiteSale):
                 img_data,
                 headers=[
                     ('Content-Type', 'image/png'),
-                    ('Cache-Control', 'public, max-age=3600'),  # Issue 82
+                    # Issue 14 fix: this response is gated by the order's access
+                    # token, so it must never be marked cacheable by a shared or
+                    # intermediary cache -- a public cache could then serve one
+                    # customer's payment QR (and receiving address) to another
+                    # visitor who happens to share that cache.
+                    ('Cache-Control', 'private, max-age=3600'),  # Issue 82
                 ]
             )
         except Exception as e:
@@ -362,10 +405,26 @@ class MoneroWebsiteSale(WebsiteSale):
             
 
     @route('/shop/payment/monero/page/<int:payment_id>', type='http', auth='public', website=True)
-    def payment_page(self, payment_id, **kwargs):
+    def payment_page(self, payment_id, access_token=None, **kwargs):
         """Display payment page for customers."""
         payment = request.env['monero.payment'].sudo().browse(payment_id)
         if not payment.exists():
+            return request.not_found()
+
+        # Issue 12 fix: this route previously had no access_token check at all --
+        # unlike the sibling /qr, /invoice and /proof routes on this controller,
+        # which all require the order's access_token via hmac.compare_digest.
+        # payment_id here is the sequential database primary key, so without a
+        # token check anyone could enumerate it and view another customer's
+        # payment page (their receiving address, amount, order reference).
+        import hmac as _hmac
+        order = payment.sale_order_id
+        if order:
+            if not access_token or not _hmac.compare_digest(
+                order.access_token or '', access_token
+            ):
+                return request.not_found()
+        elif not access_token:
             return request.not_found()
 
         provider = request.env['payment.provider'].sudo().search(
@@ -398,7 +457,18 @@ class MoneroWebsiteSale(WebsiteSale):
 
     @route('/shop/payment/monero/verify', type='json', auth='user', csrf=True)
     def verify_payments(self, payment_ids, **kwargs):
-        """Bulk verification endpoint — requires authenticated user."""
+        """Bulk verification endpoint — requires an internal Monero staff user.
+
+        Hardening found via h10: this previously only required auth='user',
+        which includes portal customers. The lookup key (payment_id) is now a
+        real secret token (Issue 16 fix) so this was not an authorization
+        bypass in the sense of guessing another customer's payment, but there
+        is no legitimate reason for a portal customer to reach a bulk
+        verification endpoint at all -- it's an operational/staff tool.
+        Restricting it to the module's own groups removes the ambiguity.
+        """
+        if not request.env.user.has_group('payment_monero_rpc.group_monero_user'):
+            return {'error': 'Access denied.'}
         try:
             results = []
             for pid in payment_ids:
@@ -415,8 +485,9 @@ class MoneroWebsiteSale(WebsiteSale):
                 })
             return results
         except Exception as e:
+            # Issue 13 (twin) fix: don't echo internal exception text to the caller.
             _logger.error("Bulk verification failed: %s", str(e))
-            return {'error': str(e)}
+            return {'error': 'Bulk verification failed. Please try again shortly.'}
 
     @route('/shop/payment/monero/invoice/<int:payment_id>', type='http', auth='public')
     def generate_invoice(self, payment_id, access_token=None, **kwargs):

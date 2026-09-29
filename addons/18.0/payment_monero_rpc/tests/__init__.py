@@ -11,3 +11,4 @@ from . import test_controllers
 from . import test_payment_provider
 from . import test_sales_order
 
+from . import test_zz_audit_probes

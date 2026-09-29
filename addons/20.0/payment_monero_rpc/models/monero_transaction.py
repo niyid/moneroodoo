@@ -44,7 +44,15 @@ class MoneroTransaction(models.Model):
     _order = 'create_date desc'  # timestamp is optional/nullable; id desc is always stable
 
     _sql_constraints = [
-        ('txid_unique', 'UNIQUE(txid)', 'Transaction hash must be unique!'),
+        # Issue 3 fix: was UNIQUE(txid) alone, which made it impossible for the
+        # same on-chain transaction to ever be recorded against a second
+        # monero.payment it also satisfies (see the search-by-txid-only upsert
+        # this constraint used to pair with, in monero_payment.py
+        # check_payment_status). Scoping to (txid, payment_id) still prevents
+        # true duplicate rows while allowing one tx to satisfy more than one
+        # payment.
+        ('txid_payment_unique', 'UNIQUE(txid, payment_id)',
+         'This transaction has already been recorded for this payment!'),
     ]
 
     payment_id = fields.Many2one(
@@ -88,6 +96,14 @@ class MoneroTransaction(models.Model):
                       # the daemon cache (updated by the daemon cron) on every read.
         help="Number of confirmations the transaction has received."
     )
+    wallet_reported_confirmations = fields.Integer(
+        string="Wallet-Reported Confirmations",
+        default=0,
+        help="Confirmation count as reported directly by the wallet RPC's incoming() "
+             "call at the time this transaction was last seen. Used as a floor by "
+             "_compute_confirmations so a payment can still confirm even if the local "
+             "monero.daemon height cache is empty or stale."
+    )
     timestamp = fields.Datetime(
         string="Timestamp",
         required=False,
@@ -121,32 +137,36 @@ class MoneroTransaction(models.Model):
     extra = fields.Text(string="Extra", help="Extra data embedded in the transaction.")
     stealth_address = fields.Char(string="Stealth Address", help="Stealth address used in the transaction.")
 
-    @api.depends('block_height')
+    @api.depends('block_height', 'wallet_reported_confirmations')
     def _compute_confirmations(self):
         """
         Compute the number of confirmations for each transaction.
-        
-        Calculates confirmations by comparing the current blockchain height
-        with the transaction's block height. Confirmations represent the
-        number of blocks that have been mined after the transaction block.
-        
+
+        Uses the higher of two signals:
+
+        - The confirmation count computed from the local daemon-height cache
+          (``current_height - block_height``), same as before.
+        - ``wallet_reported_confirmations``: the count the wallet RPC's own
+          ``incoming()`` call reported for this transfer at the time it was last
+          seen (Issue 2 fix: previously this value was read off the transfer and
+          then silently discarded, since it was being written to a compute field
+          with no inverse; the whole confirmation state machine then depended
+          entirely on monero.daemon being populated, which can lag or be empty
+          on a fresh install, permanently stalling otherwise-fully-confirmed
+          payments at ``paid_unconfirmed``).
+
         **Confirmation Calculation:**
-        
-        ``confirmations = max(0, current_height - transaction_block_height)``
-        
+
+        ``confirmations = max(wallet_reported_confirmations, current_height - transaction_block_height)``
+
         **States:**
-        
+
         - ``0 confirmations``: Transaction not yet in a block (mempool)
         - ``1+ confirmations``: Transaction included in blockchain
         - Higher confirmations indicate greater security
-        
-        .. code-block:: python
-        
-           # Transaction in block 100, current height 105
-           # confirmations = 105 - 100 = 5
-        
+
         .. note::
-           Sets confirmations to 0 if:
+           Falls back to 0 for the daemon-height component if:
            - Transaction has no block height (still in mempool)
            - Current blockchain height unavailable
            - Calculated value would be negative
@@ -157,10 +177,10 @@ class MoneroTransaction(models.Model):
         daemon = self.env['monero.daemon'].search([], limit=1, order='last_checked desc')
         current_height = daemon.current_height if daemon and daemon.current_height else 0
         for tx in self:
-            if not tx.block_height or not current_height:
-                tx.confirmations = 0
-                continue
-            tx.confirmations = max(0, current_height - tx.block_height)
+            daemon_derived = 0
+            if tx.block_height and current_height:
+                daemon_derived = max(0, current_height - tx.block_height)
+            tx.confirmations = max(daemon_derived, tx.wallet_reported_confirmations or 0)
 
     @api.depends('confirmations')
     def _compute_is_confirmed(self):

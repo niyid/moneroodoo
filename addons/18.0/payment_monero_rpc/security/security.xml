@@ -61,5 +61,37 @@
         <field name="perm_unlink" eval="False"/>
         <field name="domain_force">[(1, '=', 1)]</field>
     </record>
+
+    <!-- Issue 10 fix: security/ir.model.access.csv grants group_monero_admin
+         read/write/create on payment.provider with no scoping rule, so a Monero
+         Admin could read and write ANY payment provider in the database, not
+         just its own, including other providers' credentials (Stripe, PayPal,
+         etc). Scope it to the Monero provider only. -->
+    <record id="rule_monero_provider_own" model="ir.rule">
+        <field name="name">Monero Admin: Monero Provider Only</field>
+        <field name="model_id" ref="payment.model_payment_provider"/>
+        <field name="groups" eval="[(4, ref('payment_monero_rpc.group_monero_admin'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+        <field name="domain_force">[('code', '=', 'monero_rpc')]</field>
+    </record>
+
+    <!-- Issue 11 fix: security/ir.model.access.csv grants group_monero_manager
+         read/write/create on pos.order with no scoping rule, so a Monero Manager
+         could write/create ANY POS order, not just Monero-paid ones. Scope it to
+         orders that actually have a Monero payment attached
+         (models/pos_payment.py adds monero_payment_id to pos.order). -->
+    <record id="rule_monero_pos_order_own" model="ir.rule">
+        <field name="name">Monero Manager: Monero-Paid POS Orders Only</field>
+        <field name="model_id" ref="point_of_sale.model_pos_order"/>
+        <field name="groups" eval="[(4, ref('payment_monero_rpc.group_monero_manager'))]"/>
+        <field name="perm_read" eval="True"/>
+        <field name="perm_write" eval="True"/>
+        <field name="perm_create" eval="True"/>
+        <field name="perm_unlink" eval="False"/>
+        <field name="domain_force">[('monero_payment_id', '!=', False)]</field>
+    </record>
 </odoo>
 

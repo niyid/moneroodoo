@@ -1,7 +1,0 @@
-payment_monero_rpc
-==================
-
-.. toctree::
-   :maxdepth: 4
-
-   payment_monero_rpc

@@ -174,7 +174,12 @@ class TestPaymentProviderMonero(TransactionCase):
     @patch('odoo.addons.payment_monero_rpc.models.payment_provider.PaymentProviderMonero._get_wallet_client')
     def test_create_monero_from_fiat_payment_subaddress(self, mock_wallet):
         self._fake_valid_addresses()
-        """Test creating payment using subaddress mode — payment_id must be a str."""
+        """Test creating payment using subaddress mode.
+
+        Issue 16 fix: payment_id must be an unguessable token (it's the sole
+        lookup key for the public /status route), not the subaddress's own
+        minor index -- that index is still tracked, but in subaddress_index.
+        """
         mock_wallet.return_value.new_address.return_value = ('subaddr1', 42)
         payment = self.provider._create_monero_from_fiat_payment(
             order_ref='TEST123',
@@ -184,9 +189,12 @@ class TestPaymentProviderMonero(TransactionCase):
         )
         self.assertEqual(payment.address_seller, 'subaddr1')
         self.assertTrue(payment.is_subaddress)
-        # payment_id must be a string (Char field), not an integer
+        self.assertEqual(payment.subaddress_index, 42)
+        # payment_id must be a string (Char field) and must NOT be the small,
+        # sequential, guessable subaddress index -- it needs real entropy.
         self.assertIsInstance(payment.payment_id, str)
-        self.assertEqual(payment.payment_id, '42')
+        self.assertNotEqual(payment.payment_id, '42')
+        self.assertEqual(len(payment.payment_id), 64)
 
     @patch('odoo.addons.payment_monero_rpc.models.payment_provider.PaymentProviderMonero._get_wallet_client')
     def test_create_monero_from_fiat_payment_integrated(self, mock_wallet):

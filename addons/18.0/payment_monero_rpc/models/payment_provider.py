@@ -94,6 +94,18 @@ class PaymentProviderMonero(models.Model):
         help="Number of blockchain confirmations required before considering payment complete"
     )
 
+    @api.constrains('confirmation_threshold')
+    def _check_confirmation_threshold(self):
+        """Issue 8 fix: nothing previously stopped this being set to 0, which would
+        mean a payment with zero real blockchain confirmations -- a fully
+        reversible, unconfirmed transaction -- was treated as final."""
+        for provider in self:
+            if provider.code == 'monero_rpc' and provider.confirmation_threshold < 1:
+                raise ValidationError(_(
+                    "Confirmations required must be at least 1. A value of 0 would "
+                    "treat an unconfirmed (and therefore reversible) transaction as "
+                    "final."))
+
     rpc_timeout = fields.Integer(
         string='Timeout',
         default=180,
@@ -182,7 +194,7 @@ class PaymentProviderMonero(models.Model):
         recordset
             The Monero payment provider record, or empty recordset if not found
         """
-        return self.env['payment.provider'].search([('code', '=', 'monero_rpc')], limit=1)
+        return self.env['payment.provider'].sudo().search([('code', '=', 'monero_rpc')], limit=1)
 
     def _get_daemon(self):
         """Initialize and return Monero Daemon RPC client.
@@ -240,10 +252,15 @@ class PaymentProviderMonero(models.Model):
                           self.rpc_url, self.rpc_user, self.rpc_timeout)
             host = "127.0.0.1"
             port = 38082
+            protocol = "http"
             if self.rpc_url:
                 parsed_url = urllib.parse.urlparse(self.rpc_url)
                 host = parsed_url.hostname or "127.0.0.1"
                 port = parsed_url.port or 38082
+                # Issue 6 fix: the URL's scheme was parsed and then discarded, so an
+                # https:// rpc_url was silently contacted over plaintext http, sending
+                # the RPC username/password unencrypted regardless of configuration.
+                protocol = parsed_url.scheme or "http"
 
             # Issue 48: os.path.exists check is only valid when Odoo runs on the same
             # host as the wallet process. For remote wallet RPC setups it always fails.
@@ -251,6 +268,7 @@ class PaymentProviderMonero(models.Model):
 
             wallet = Wallet(
                 JSONRPCWallet(
+                    protocol=protocol,
                     host=host,
                     port=port,
                     user=self.rpc_user,
@@ -264,6 +282,8 @@ class PaymentProviderMonero(models.Model):
             _logger.error("Wallet connection failed: %s", str(e))
             raise UserError(_("Could not connect to Monero wallet. Please check your RPC settings.")) from e
         
+    _NETWORK_TYPE_TO_LIB_NET = {'mainnet': 'main', 'stagenet': 'stage', 'testnet': 'test'}
+
     def _validate_address(self, addr_str, is_subaddress=True):
         """Validate a Monero address.
 
@@ -277,21 +297,32 @@ class PaymentProviderMonero(models.Model):
         Returns
         -------
         bool
-            True if address is valid, False otherwise
+            True if address is valid AND belongs to this provider's configured
+            network, False otherwise.
+
+        Notes
+        -----
+        Issue 7 fix: this previously checked only that the string parses as *some*
+        valid Monero (sub)address, never comparing against ``self.network_type`` --
+        a stagenet or testnet address parsed as valid even when the provider was
+        configured for mainnet, and vice versa.
         """
         try:
             if is_subaddress:
-                SubAddress(addr_str)
+                addr = SubAddress(addr_str)
             else:
-                Address(addr_str)
-            return True
+                addr = Address(addr_str)
+            expected_net = self._NETWORK_TYPE_TO_LIB_NET.get(self.network_type)
+            return expected_net is None or addr.net == expected_net
+        except (InvalidAddress, ValueError):
+            return False
         except (InvalidAddress, ValueError):
             return False
         
     @api.model
     def _cron_update_payment_provider(self):
         """Cron job to update payment provider data."""
-        provider = self.env['payment.provider'].search([('code', '=', 'monero_rpc')], limit=1)
+        provider = self.env['payment.provider'].sudo().search([('code', '=', 'monero_rpc')], limit=1)
         if provider:
             provider.fetch_wallet_addresses()
 
@@ -350,7 +381,21 @@ class PaymentProviderMonero(models.Model):
                     raise UserError(_("Generated invalid subaddress for current network"))
 
                 payment_values = {
-                    'payment_id': str(subaddress[1]),  # convert index to str
+                    # Issue 16 fix (found while re-verifying h03): payment_id is the
+                    # sole lookup key for the anonymous /status route and the
+                    # authenticated-but-otherwise-unscoped /verify route -- it needs
+                    # to function as an unguessable bearer token. It was previously
+                    # set here to str(subaddress[1]), the subaddress's own minor
+                    # index (1, 2, 3, ...), which is small and sequential, not a
+                    # secret. use_subaddresses defaults to True ("recommended"), so
+                    # this was the payment_id every normal checkout actually got.
+                    # The index itself is still needed (for wallet-side correlation
+                    # and the RPC-level subaddress filter in check_payment_status)
+                    # so it now goes in the dedicated subaddress_index field instead,
+                    # and payment_id is left unset here so monero.payment.create()'s
+                    # own secrets.token_hex(32) generator produces it, exactly as it
+                    # already does for every other caller of this model.
+                    'subaddress_index': subaddress[1],
                     'address_seller': subaddress[0],
                     'is_subaddress': True,
                 }
@@ -687,7 +732,7 @@ class PaymentProviderMonero(models.Model):
                 return float(cached)
 
         provider = self if self._name == 'payment.provider' and self.ids else \
-            self.env['payment.provider'].search([('code', '=', 'monero_rpc')], limit=1)
+            self.env['payment.provider'].sudo().search([('code', '=', 'monero_rpc')], limit=1)
 
         try:
             response = requests.get(

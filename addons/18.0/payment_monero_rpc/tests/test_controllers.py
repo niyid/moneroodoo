@@ -178,12 +178,16 @@ class TestMoneroWebsiteSale(HttpCase):
     # ------------------------------------------------------------------
     @patch_request
     def test_payment_page_reads_db_on_empty_session(self, mock_request):
-        """payment_page falls back to DB record when session is empty."""
+        """payment_page falls back to DB record when session is empty.
+
+        Issue 12 fix: payment_page now requires the order's access_token, same
+        as the sibling /qr, /invoice and /proof routes. Pass it explicitly here.
+        """
         mock_request.env = self.env
         mock_request.session = {}  # no monero_payment_data
         mock_request.render = MagicMock(return_value='rendered')
 
-        result = self.controller.payment_page(self.payment.id)
+        result = self.controller.payment_page(self.payment.id, access_token=self.order.access_token)
         mock_request.render.assert_called_once()
         ctx = mock_request.render.call_args[0][1]
         self.assertIn('payment', ctx)

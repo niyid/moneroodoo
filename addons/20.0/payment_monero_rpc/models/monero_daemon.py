@@ -130,7 +130,7 @@ class MoneroDaemon(models.Model):
         if row:
             return self.browse(row[0])
         # Safe to create — lock is held
-        provider = self.env['payment.provider'].search(
+        provider = self.env['payment.provider'].sudo().search(
             [('code', '=', 'monero_rpc')], limit=1)
         # Default to stagenet if no provider — safer than mainnet for unconfigured installs
         network = provider.network_type if provider else 'stagenet'
@@ -295,7 +295,7 @@ class MoneroDaemon(models.Model):
         _logger.info("==== MONERO DAEMON STATUS CHECK STARTED ====")
         daemon = self.get_or_create_daemon_record()  # always defined before try
         try:
-            provider = self.env['payment.provider'].search([('code', '=', 'monero_rpc')], limit=1)
+            provider = self.env['payment.provider'].sudo().search([('code', '=', 'monero_rpc')], limit=1)
             if not provider:
                 error_msg = "Monero RPC provider not found"
                 _logger.error(error_msg)

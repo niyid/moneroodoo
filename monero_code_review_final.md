@@ -1,357 +1,315 @@
-# Monero Odoo Module — Complete Code Review Report
-### Project: `payment_monero_rpc` | Three-Pass Review | Final Documentation
+# payment_monero_rpc — Code Review (Odoo 18.0, ported to 19.0/20.0)
+
+**This is the third version of this document.** The first was a static, read-only review
+(164 issues across three passes, no code executed). The second replaced it after actually
+installing the module on a real Odoo 18.0 + PostgreSQL instance and running it over real HTTP,
+which found 15 confirmed defects the static review had missed entirely — including several
+that make the module non-functional for real customers, not just imperfect. This version
+replaces that one: every one of those 15 findings has been fixed in the module source, and
+4 more were found and fixed along the way, discovered only because fixing the first batch
+exposed code paths that had never actually run before. All 19 fixes are re-verified against a
+real Odoo 18.0 install; the same fixes have been ported to 19.0 and 20.0 and verified against
+each version's own shipped test suite on a real install of that version.
+
+**Method, same as the previous pass:** real Odoo (18.0, 19.0, and 20.0 in turn), real
+PostgreSQL, real HTTP requests. Only the Monero wallet RPC transport itself was mocked.
+Test code lives in `tests/test_zz_audit_probes.py` (18.0 only — see "Scope of this pass" below).
+
+**Result on 18.0:** 65 of 65 tests pass — the original 38 shipped tests (2 of which had to be
+updated because they asserted the old, buggy behavior as correct — see Finding 5) plus 27
+adversarial probes covering every finding below.
+
+**Result on 19.0 / 20.0:** the module's own shipped suite passes on each — 39/39 on 19.0,
+41/41 on 20.0 — confirming the ported fixes don't break anything version-specific. See
+"Scope of this pass" for exactly what was and wasn't re-verified on these two.
 
 ---
 
-## Executive Summary
+## Findings, all fixed
 
-This document consolidates all three passes of code review conducted on the `payment_monero_rpc` Odoo module. The module provides Monero (XMR) cryptocurrency payment processing for Odoo e-commerce and Point of Sale systems.
+### 1. Guest checkout raised AccessError — the module could not take a Monero payment at all
+**Was:** `_process_monero_payment` (route `/shop/payment/monero/process/<order_id>`, `auth='public'`)
+read `payment.provider` without `.sudo()`. Core Odoo restricts read access on that model to
+`base.group_system`; an anonymous or portal shopper has no read access to it at all, so the
+route raised `AccessError` before a payment record ever existed. The same missing `.sudo()`
+also existed in the POS payment-creation path (`models/pos_payment.py`) and three internal
+lookups in `models/payment_provider.py` / `models/monero_daemon.py` — same bug, several places.
 
-| Pass | Rating | Issues Found | Issues Fixed |
-|---|---|---|---|
-| v1 — Initial Review | 3.0 / 5 | 124 | 124 |
-| v2 — Second Review | 4.5 / 5 | 25 | 25 |
-| v3 — Third Review | 4.8 / 5 | 15 | 15 |
-| **Final State** | **5.0 / 5** | **164 total** | **164 resolved** |
+**Fix:** added `.sudo()` to all six lookups.
 
----
+**Fixed but not by that alone — a second bug was hiding behind the first:** once the
+`AccessError` was gone, the request got further and crashed with `TypeError: Object of type
+bytes is not JSON serializable`. `payment.image_qr` is a Binary field that reads back as raw
+`bytes`; it was being placed directly into `request.session[...]`, which Odoo JSON-serializes
+on every write. This had likely never actually run in production either, for the same reason
+the AccessError masked it in testing. **Fix:** the QR image is no longer cached in the session
+at all (the code's own comment already said `payment_page` reads it straight from the DB, so
+caching it there was never necessary — this also independently resolves Finding 9 below); the
+JSON response returned to the caller still includes it, now correctly base64-encoded to a string.
 
-## Pass 1 — Initial Review (124 Issues)
+**Verified by:** `test_h01_guest_can_start_payment` now passes — an anonymous request gets
+`{'success': True, ...}` with a real payment attached, on a real HTTP request against a real
+database.
 
-**Rating: 3 / 5 — Functional but carries significant production risks**
+### 2. Confirmation count came from an unrelated cached value, not from the wallet's own report
+**Was:** `monero.transaction.confirmations` was computed only from `monero.daemon.current_height
+- block_height`. It never read what the wallet's own `incoming()` call reported for that
+transfer. With the `monero.daemon` table empty — true of every fresh install until its cron's
+first successful run — a payment with any number of real confirmations computed `confirmations
+= 0` and sat at `paid_unconfirmed` forever.
 
-### Severity Breakdown
+**Fix:** added a stored `wallet_reported_confirmations` field on `monero.transaction`, populated
+from the wallet's own reported value at the same point the old code already read (and
+discarded) it. `_compute_confirmations` now takes `max(daemon-derived, wallet_reported_confirmations)`
+— the daemon-height number is still used when it's ahead, but a payment is no longer hostage to
+a second, independently-timed cache being populated yet.
 
-| Severity | Count |
-|---|---|
-| 🔴 Critical | 27 |
-| 🟡 Moderate | 66 |
-| 🟢 Low | 31 |
+**Verified by:** `test_s01_baseline_exact_payment_confirms` and
+`test_s08_confirmations_depend_on_a_separate_uncoupled_daemon_row` — the latter explicitly
+deletes every `monero.daemon` row and confirms a payment with 10,000 real confirmations still
+reaches `state == 'confirmed'`.
 
----
+### 3. A shared transaction hash only ever attached to the first payment it satisfied
+**Was:** incoming transactions were deduplicated globally by `txid` alone, with
+`monero.transaction.payment_id` as a single-owner Many2one and a `UNIQUE(txid)` database
+constraint enforcing it. If one on-chain transaction happened to satisfy two different pending
+payments, the second payment's `amount_received` still got credited, but it never got its own
+`transaction` row — so its `confirmations` (computed from `transaction_ids`) stayed 0 forever.
 
-### `models/monero_daemon.py`
+**Fix:** the upsert lookup and the database constraint are both now scoped to
+`(txid, payment_id)` rather than `txid` alone, so the same transaction can be recorded once per
+payment it satisfies.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 1 | 🟡 | `get_current_height` used `order='id desc'` instead of `order='last_checked desc'` | Changed to `last_checked desc` |
-| 2 | 🟡 | `get_current_height` returned `0` ambiguously — callers couldn't distinguish "no daemon" from "height is 0" | Returns `None` as sentinel |
-| 3 | 🔴 | Race condition (TOCTOU) in `get_or_create_daemon_record` — two workers could both create records | Added `SELECT ... FOR UPDATE` |
-| 4 | 🟡 | Default network `'mainnet'` when no provider found — unsafe for test environments | Changed default to `'stagenet'` |
-| 5 | 🟡 | Unnecessary `sudo()` on `unlink()` in `cleanup_old_records` | Removed `sudo()` |
-| 6 | 🟢 | `keep_latest=5` was a magic number | Documented as configurable |
-| 7 | 🟢 | Unnecessary `try/except` in `_safe_getattr` | Kept — properties can raise |
-| 8 | 🟡 | Missing `from monero.daemon import Daemon` import — `NameError` at runtime | Import added |
-| 9 | 🟡 | Redundant `get_or_create_daemon_record()` call in exception handler | Removed redundant call |
-| 10 | 🟢 | `target_height == 0` edge case — daemon just started would show `'online'` not `'syncing'` | Added `target_height > 0` guard |
-| 11 | 🟢 | `sync_percentage` showed 100% when both heights were 0 | Added double-zero guard |
+**Verified by:** `test_s05_one_tx_paying_two_payments_should_settle_both` — both payments now
+reach `confirmed`.
 
----
+### 4. A confirmed payment could regress to failed after the order was already confirmed
+**Was:** `_payment_confirmed` wrote `state='confirmed'` and confirmed the sale order first, then
+sent a confirmation email; any exception in that later, non-critical step was caught, logged,
+and re-raised. That exception propagated into `check_payment_status`'s own exception handler,
+which called `_handle_rpc_error()` — overwriting the record straight back to `state='failed'`,
+while the order stayed confirmed (`state == 'sale'`). A transient mail-server hiccup, unrelated
+to the money itself, could leave a fulfilled order permanently paired with a payment record that
+claims to have failed.
 
-### `models/monero_payment.py`
+**Fix:** the confirmation email send and the chatter post are now each in their own try/except
+that logs on failure but does not re-raise, so nothing after the critical `state='confirmed'`
+write can undo it.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 12 | 🔴 | `amount`, `amount_received`, `amount_due` stored as `fields.Float` — XMR has 12 decimal places, float introduces rounding errors | Documented as technical debt; Decimal used in calculations |
-| 13 | 🟡 | `payment_id` field name collides with Odoo ORM convention for `Many2one` to `payment.transaction` | Field retained; documented |
-| 14 | 🟡 | Hardcoded 1-hour expiry | Noted as configurable per provider |
-| 15 | 🟢 | `currency` field always `'XMR'` and readonly — effectively a constant | Kept for display purposes |
-| 16 | 🟢 | `amount` in `_compute_payment_ref` name means the field changes on every amount update | Noted; acceptable |
-| 17 | 🟡 | QR docstring said error correction level L (7%) but code used M (15%) | Docstring corrected to M |
-| 18 | 🟡 | Error correction level choice | M kept — mobile scanning reliability |
-| 19 | 🟢 | QR binary blobs persist indefinitely for expired/failed payments | Noted; cleanup tied to archiving |
-| 20 | 🟡 | `secrets.token_hex(32)` fallback `payment_id` undocumented assumption | Documented |
-| 21 | 🔴 | `wallet.incoming()` fetched ALL wallet transactions, then filtered in Python — O(n) for large wallets | RPC-level subaddress filtering with Python fallback |
-| 22 | 🔴 | No DB row lock in `check_payment_status` — concurrent workers could double-confirm | Added `SELECT ... FOR UPDATE NOWAIT` |
-| 23 | 🔴 | `_payment_confirmed` called as `self._payment_confirmed(self, values)` — `self` passed twice | Fixed to `self._payment_confirmed(values)` |
-| 24 | 🔴 | Terminal state guard missing — confirmed payment could regress to pending | Guard added: return early if already `confirmed/expired/failed` |
-| 25 | 🟡 | Confirmation logic used `break` on first confirmed tx — ignored remaining transactions | Replaced with ORM computed minimum-confirmation field |
-| 26 | 🟡 | `paymentId` parameter accepted but unused | Removed from filtering logic |
-| 27 | 🟡 | Two sources of truth for confirmation counts | Unified to ORM computed field |
-| 28 | 🔴 | `generate_payment_proof` signature broken | Fixed |
-| 29 | 🟡 | `block_height` in proof used minimum — intent unclear | Documented: earliest block |
-| 30 | 🔴 | `hmac.new()` deprecated API | Updated to `hmac.HMAC()` |
-| 31 | 🔴 | Float in HMAC signature data — non-deterministic string representation | `Decimal(str(...)).normalize()` used instead |
-| 32 | 🔴 | HMAC private key stored in `ir.config_parameter` plaintext | Documented; env-var migration noted |
-| 33 | 🔴 | Double confirmation email — `_send_order_confirmation_mail` + `action_confirm(send_email=True)` | Removed duplicate; `send_email=False` on `action_confirm` |
-| 34 | 🔴 | `payment.transaction` searched by wrong field (`payment_id` instead of `reference`) | Fixed to search by `reference` |
-| 35 | 🟡 | `self` vs `payment` confusion in `_payment_confirmed` | Refactored to single-arg signature |
-| 36 | 🟡 | f-strings in `_logger` calls | Changed to `%s` lazy formatting |
-| 37 | 🟢 | `paid_unconfirmed` payments being expired even though funds arrived on-chain | Removed `paid_unconfirmed` from expiry cron |
-| 38 | 🟡 | New RPC connection opened per payment in cron — up to 100 connections per run | Noted; acceptable for batch of 100 |
-| 39 | 🟡 | `_()` applied after string interpolation — prevents translation extraction | Fixed: `_()` applied to template before substitution |
+**Verified by:** `test_s06_failure_after_confirmation_must_not_regress_state` — a forced
+exception in the mail-send step no longer changes the payment's state; it stays `confirmed`.
 
----
+### 5. `payment_id` — the public lookup key — was a small, guessable sequential index
+**This was not in the previous version of this review, and it directly contradicts something
+that review concluded.** That version treated the lack of a token check on `/status` and
+`/verify` as acceptable, reasoning that `payment_id` was itself a `secrets.token_hex(32)` value
+functioning as a bearer credential. That's true in *integrated-address mode*, but
+`use_subaddresses` defaults to `True` ("recommended" per its own help text), and in that —
+the actual default — mode, `_create_monero_from_fiat_payment` set `payment_id` to
+`str(subaddress[1])`: the subaddress's own minor index, i.e. `"1"`, `"2"`, `"3"`, ... Every
+normal checkout got a trivially enumerable lookup key on two routes that check no other
+credential.
 
-### `models/payment_provider.py`
+This was found while re-verifying the earlier review's own "not a defect" conclusion for that
+exact area (`test_h03`), which is why re-running fixes with real tests matters: a conclusion
+that looked sound against the integrated-address code path was wrong for the code path real
+checkouts actually use.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 40 | 🔴 | `rpc_password` and `wallet_password` stored in DB plaintext despite `password=True` UI masking | Documented; env-var migration noted |
-| 41 | 🟡 | `manual_rates` default `{"USD": 200, "EUR": 180}` — wildly stale | Changed default to `{}` |
-| 42 | 🟡 | Concurrent `wallet_addresses` writes — last-write-wins race | Noted; acceptable for cron pattern |
-| 43 | 🟢 | Dynamic `Selection` field antipattern | Retained with documentation |
-| 44 | 🔴 | `monero.daemon.Daemon(...)` NameError — `monero` not imported | Fixed to use imported `Daemon` class |
-| 45 | 🟡 | `_get_daemon` re-fetched provider from DB unnecessarily | Uses `self` directly |
-| 46 | 🟡 | Default daemon port `38082` was wallet port, not daemon port | Fixed to `38081` |
-| 47 | 🟡 | `_get_wallet_client` re-fetched provider from DB unnecessarily | Uses `self` directly |
-| 48 | 🟡 | `os.path.exists(wallet_path)` check invalid for remote wallet RPC | Removed |
-| 49 | 🟢 | No connection pooling for wallet client | Noted; acceptable |
-| 50 | 🔴 | Subaddress orphaned on DB rollback — lost payments | Documented reconciliation requirement |
-| 51 | 🟡 | `secrets.token_hex(8)` payment ID length assumption undocumented | Documented |
-| 52 | 🟡 | 24-hour e-commerce expiry vs 3-hour POS expiry — inconsistent | Noted |
-| 53 | 🟢 | `amount / rate` plain float division | Changed to `Decimal` arithmetic |
-| 54 | 🟡 | No exchange rate caching — hit CoinGecko rate limit under load | 60-second `ir.config_parameter` cache added |
-| 55 | 🟡 | Silent fallback to stale manual rates | Explicit `_logger.warning` on fallback |
-| 56 | 🟢 | `_cron_update_xmr_rates` alias only covers USD | Documented |
-| 57 | 🟡 | `balance.balance / 1e12` float constant for piconero conversion | Changed to integer `1_000_000_000_000` |
-| 58 | 🟡 | Writing to computed fields without `inverse` | Reviewed; fields have `store=False` |
-| 59 | 🟡 | `_compute_wallet_selection` called with `self` as model class, not record | Refactored |
+**Fix:** the subaddress's minor index now goes into the already-existing (but previously never
+populated) `subaddress_index` field, and `payment_id` is left for `monero.payment.create()`'s
+own `secrets.token_hex(32)` generator to fill in, exactly as it already does for every other
+caller of that model. A shipped test (`test_create_monero_from_fiat_payment_subaddress`) had
+literally asserted the old value (`payment.payment_id == '42'`) as correct; it's been updated to
+assert the corrected behavior instead (`subaddress_index == 42`, `payment_id` a real 64-hex-char
+token, and never equal to the small index).
 
----
+**Verified by:** `test_h03_status_lookup_key_is_itself_an_unguessable_secret` now passes for the
+actual default code path.
 
-### `models/monero_transaction.py`
+### 6. The customer payment page had no access-token check at all
+**Was:** `payment_page` (`/shop/payment/monero/page/<int:payment_id>`) browsed the payment by its
+sequential database id and rendered it with no token check whatsoever — unlike the sibling
+`/qr`, `/invoice`, and `/proof` routes on the same controller, which all check the order's
+`access_token` via `hmac.compare_digest` first.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 60 | 🟡 | `_compute_confirmations` made live RPC call on every UI load | Changed to read from `monero.daemon` cache |
-| 61 | 🟡 | Stored `confirmations` depended only on `block_height` (set once) — stale after first write | Made `store=False` |
-| 62 | 🟡 | Default confirmation threshold fallback was `2` — unsafe if provider misconfigured | Changed fallback to `10` |
-| 63 | 🟢 | Duplicate confirmation logic in `MoneroTransaction` and `MoneroPayment` | Unified via ORM dependency |
-| 64 | 🟡 | `timestamp = fields.Datetime(required=True)` but blockchain can return `None` | Changed to `required=False` |
+**Fix:** added the same `access_token` check the other three routes already use.
 
----
+**Verified by:** `test_h02_payment_page_must_require_a_token` — a tokenless request now gets a
+clean `404` instead of the payment's address and details.
 
-### `models/pos_payment.py`
+### 7. The process route was not idempotent, and didn't check for a cancelled order
+**Neither of these was in the previous review — both were found only once the guest-checkout
+AccessError from Finding 1 was fixed and the route could actually run to completion.**
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 65 | 🟡 | `amount / rate` float division in `_convert_to_xmr` | Changed to `Decimal` arithmetic |
-| 66 | 🟢 | Docstring referenced wrong method name | Updated |
-| 67 | 🔴 | `payment_method.monero_wallet_address` — field doesn't exist → `AttributeError` | Fixed to use `monero_payment.address_seller` |
-| 68 | 🔴 | `payment_method.monero_qr_size` — field doesn't exist → `AttributeError` | Fixed to use `payment_method.qr_size` |
-| 69 | 🟡 | Return dict included fiat amount labelled as XMR | Returns `amount_xmr` and `amount_fiat` separately |
+- A retry, double-click, or slow-response resend created a brand-new `monero.payment` record
+  and burned a brand-new subaddress every single time, leaving several live, independent
+  payment requests outstanding for the same order.
+- Nothing checked `order.state` before creating a payment, so a cancelled order could still get
+  one.
 
----
+**Fix:** the route now reuses an existing payment that's still in an active state
+(`pending`/`partial`/`paid_unconfirmed`/`overpaid`) for the same order instead of creating
+another one, and rejects outright if the order is cancelled.
 
-### `controllers/main.py`
+**Verified by:** `test_h06_process_route_must_be_idempotent` (3 calls now produce exactly 1
+payment record) and `test_h07_cancelled_order_must_not_get_a_payment`.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 70 | 🔴 | `_validate_order_access` accepted `access_token` but never used it — complete security bypass | Token validated with `hmac.compare_digest` |
-| 71 | 🟡 | Record fetched via `browse()` before lock acquired — TOCTOU window | Documented; low risk |
-| 72 | 🟢 | Non-constant-time token comparison | Fixed to `hmac.compare_digest` |
-| 73 | 🔴 | `_process_monero_payment` had no access control — anyone could create payments for any order | `_validate_order_access` called before processing |
-| 74 | 🟡 | QR image blob stored in session | Image removed from session; DB read on page load |
-| 75 | 🟢 | Repeated `res.currency` search per request | Noted |
-| 76 | 🟡 | `csrf=True` on a GET that created DB state | Documented |
-| 77 | 🟡 | Exception swallowed in `monero_payment_processor` — redirect with no logging | `_logger.error` added before redirect |
-| 78 | 🟢 | `_verify_access_token` may not exist in all Odoo versions | Replaced with `_validate_order_access` |
-| 79 | 🟡 | Response key `required_confirmations` misleadingly named (it was remaining, not required) | Renamed to `remaining_confirmations` |
-| 80 | 🟢 | `result` variable from `check_payment_status` discarded | Documented |
-| 81 | 🔴 | QR code endpoint had no access control — any payment ID enumerable | Access token required |
-| 82 | 🟢 | No `Cache-Control` headers on QR endpoint | Added `Cache-Control: public, max-age=3600` |
-| 83 | 🟡 | Invoice/proof routes allowed access when no linked order (no auth path) | `not_found()` returned when no order |
+### 8. Any transient RPC error permanently failed the payment
+**Also not in the previous review — found the same way as Finding 7.** `_handle_rpc_error`
+unconditionally set `state='failed'` on *any* exception, including a single connection timeout
+during a routine anonymous status poll, for a payment that had done nothing wrong.
 
----
+**Fix:** the active/recoverable states (`pending`, `partial`, `paid_unconfirmed`, `overpaid`)
+are now left untouched by a bare RPC error; only a payment already outside those states gets
+moved to `failed`. The error message is still recorded either way, for troubleshooting.
 
-### `hooks.py`
+**Verified by:** `test_h05_anonymous_poll_must_not_permanently_fail_a_payment`.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 84 | 🟡 | Reinstall generates new proof key — all previous proofs become unverifiable | Warning added to docstring |
-| 85 | 🟡 | Dead `os.environ` cleanup code for key that was never set there | Removed |
+### 9. The QR blob was cached in the session (see Finding 1 — fixed as part of that same change)
 
----
+### 10. The shipped provider was enabled, published, and live, with credentials that were public
+**Was:** the data file created the provider with `state="enabled"` (Odoo 18/19) /
+`active="True"` (Odoo 20, which replaced `state` with a plain active flag), `is_published=True`,
+and a hardcoded `rpc_password`, `wallet_password`, and a wallet directory that was literally the
+original developer's home path (`/home/niyid/monero-x86_64-linux-gnu-v0.18.3.4/wallets`).
 
-### `models/res_config_settings.py`
+**Fix:** ships disabled/inactive, unpublished, with all four fields blanked.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 86 | 🔴 | `monero_rpc_password` stored in `ir.config_parameter` — readable by all admins; password in two places | Documented; single source recommended |
-| 87 | 🟡 | Field named `monero_testnet` but label/param said `stagenet` — these are distinct Monero networks | Renamed to `monero_stagenet` |
-| 88 | 🔴 | `ValidationError` not imported — `NameError` at runtime when saving invalid URL | Import added |
-| 89 | 🟡 | Validation ran after `super().set_values()` — bad values already persisted before error | Validation moved before `super()` |
-| 90 | 🟡 | Only `monero_rpc_url` validated, not `monero_daemon_url` | Both URLs validated |
-| 91 | 🟢 | Validation error message not wrapped in `_()` | Wrapped |
+**Verified by:** `test_c07_shipped_provider_must_not_be_enabled_out_of_the_box`.
 
----
+### 11. TLS was silently downgraded to plaintext
+**Was:** `_get_wallet_client` never passed `protocol=` to `JSONRPCWallet`, whose default is
+`'http'`. An `https://` `rpc_url` had no effect — the wallet RPC username and password were
+always sent in plaintext.
 
-### JavaScript — `payment_form_monero.js`
+**Fix:** the URL's scheme is now parsed and passed through as `protocol=`.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 105 | 🔴 | Confirmation threshold hardcoded to `2` — ignored provider setting | Changed to use `status.remaining_confirmations` from server |
-| 106 | 🟡 | Null `orderId` gave `parseInt(null) = NaN` — silent server rejection | Guard + user-friendly error message |
-| 107 | 🟡 | `_populatePaymentData` called `document.getElementById` on IDs not in template — silent no-ops | Fixed to use `querySelector` within container |
-| 108 | 🟡 | `setInterval` leaks on hard browser navigation | Documented; SPA cleanup in `destroy()` |
-| 109 | 🟢 | CSS class used as semantic flag for interval duration | Changed to use `payment.state` |
+**Verified by:** `test_c01_https_rpc_url_must_stay_https`.
 
----
+### 12. Address validation never checked which network it was validating against
+**Was:** `_validate_address` only checked that a string parses as *some* valid Monero
+(sub)address; it never compared the parsed address's network against `self.network_type`, so a
+stagenet or testnet address passed as valid even when the provider was configured for mainnet.
 
-### JavaScript — `payment_screen_monero.js` (POS)
+**Fix:** compares the address library's own `.net` against the provider's `network_type`.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 110 | 🔴 | `verificationInterval` in temporal dead zone inside `setInterval` callback — `ReferenceError` | Declared with `let` before `setInterval` |
-| 111 | 🔴 | Error handler referenced `paymentId` (camelCase) but parameter was `payment_id` (snake_case) — `ReferenceError` | Consistent `payment_id` used throughout |
-| 112 | 🔴 | `this.moneroPaymentPopup` never assigned — `TypeError` on property access | Replaced with `useState` reactive state object |
-| 113 | 🔴 | `_getStatusConfig` mutated `this.props` and called `this.render()` — OWL anti-pattern | Returns plain config object; `useState` updated instead |
-| 114 | 🟡 | All `_t()` calls commented out — POS would not localise | `_t()` re-enabled throughout |
-| 115 | 🟡 | `handleRegularOnlinePayments` returned `undefined` — silently blocked non-Monero payments | Explicit `return true` added |
-| 116 | 🟡 | `luxon.DateTime.now()` used as undeclared global | Explicit `import { DateTime } from "luxon"` added |
-| 117 | 🟢 | `activeMoneroPayments` Set maintained but never queried for deduplication | Kept and used for `add`/`delete` deduplication |
+**Verified by:** `test_c02_address_validation_must_respect_network_type`.
 
----
+### 13. No floor on the confirmation threshold
+**Was:** nothing stopped `confirmation_threshold` being set to `0`, at which point a payment
+with zero real confirmations — fully reversible — would be treated as final.
 
-### `__manifest__.py`
+**Fix:** added `@api.constrains` requiring at least 1.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 118 | 🟡 | Dual-version comments (`v18`/`v19`) in single manifest | Noted; separate branches recommended |
-| 119 | 🟡 | Unused `npm` packages listed (`monero-ts`, etc.) | Removed |
-| 120 | 🟢 | `web.assets_qweb` deprecated in Odoo 17+ | Moved to `web.assets_backend` |
-| 121 | 🟢 | Demo data not reviewed for real credentials | Noted |
+**Verified by:** `test_c04_zero_confirmations_must_be_rejected`.
 
----
+### 14. Two crons ran the identical job
+**Was:** `data/monero_cron.xml` defined two `<record>` blocks sharing the id
+`cron_check_payment_status`; Odoo's loader treats a repeated id as the same record redefined in
+place, so only the second definition ever actually existed, and it called
+`_cron_check_expired_payments()` — already run separately, on its own schedule, by
+`cron_check_expired_payments`. The first block's own `_cron_check_payment_status()` method was
+never implemented at all.
 
-### Test Suite — Issues 92–104
+**Fix:** removed the redundant block; the job it was meant to do is already covered by
+`_cron_verify_pending_payments`, which runs every 5 minutes.
 
-| # | Sev | Issue | Fix Applied |
-|---|---|---|---|
-| 92 | 🔴 | `test_validate_order_access` only checked valid path — never tested invalid token rejection | Invalid token rejection test added |
-| 93 | 🟡 | `test_process_monero_payment` didn't test unauthenticated path | Unauthenticated path tested |
-| 94 | 🟡 | `test_generate_qr_code_returns_png` didn't test unauthenticated access blocked | Unauthenticated block test added |
-| 95 | 🟢 | `test_get_translations_returns_empty_list` — valid regression test | No change needed |
-| 96 | 🔴 | `test_check_payment_status_confirmed` would crash on missing email template XML ID | `raise_if_not_found=False` added to `env.ref` |
-| 97 | 🟡 | `test_get_wallet_client_success` missing `os.path.exists` mock | Mock no longer needed after fix #48 |
-| 98 | 🟡 | `test_generate_subaddress` called `self.provider._generate_subaddress(self.provider, ...)` with wrong arg | Fixed to `_generate_subaddress(label='Test')` |
-| 99 | 🟢 | `test_compute_wallet_selection` only asserted length, not tuple format | Format verified by ORM at runtime |
-| 100 | 🔴 | `test_monero_payment_flow` asserted `state in ('confirmed', 'done', 'paid')` — `'done'` and `'paid'` are not valid states | Fixed to `assertEqual(payment.state, 'confirmed')` |
-| 101 | 🔴 | `mock_transfer.transaction.timestamp = datetime.utcnow()` — naive datetime, Odoo expects tz-aware | Fixed to `datetime.now(tz=timezone.utc)` |
-| 102 | 🟡 | `MAX(payment_id)` on `Char` field — lexicographic not numeric max | Fixed to `MAX(id)` on integer PK |
-| 103 | 🟡 | `warnings.warn(...)` used as skip mechanism | Removed; `import warnings` also cleaned up |
-| 104 | 🟢 | Scenario 2 (address reuse) made no assertions | `assertIn(payment_reuse.state, [...])` added |
+**Verified by:** `test_c06_no_two_crons_should_do_identical_work`.
 
----
+### 15. Monero Admin could write to every payment provider in the database, not just its own
+**Was:** the ACL granted `group_monero_admin` full read/write/create on `payment.provider` with
+no scoping — a Monero Admin could read and modify any other configured provider's credentials
+(Stripe, PayPal, whatever else).
 
-## Pass 2 — Second Review (25 Issues)
+**Fix (18.0/19.0):** added an `ir.rule` scoping the group's access to `[('code', '=',
+'monero_rpc')]`. **Fix (20.0):** the same scoping is expressed as the `domain` column on the
+model's row in `security/ir.access.csv`, since 20.0 merged `ir.rule` and `ir.model.access` into
+a single `ir.access` model — a straight XML port would have been wrong for this version.
 
-**Rating: 4.5 / 5 — Significantly improved**
+**Verified by:** `test_a01_monero_admin_must_not_write_other_providers_credentials`.
 
-| # | Sev | File | Issue | Fix Applied |
-|---|---|---|---|---|
-| 1 | 🟡 | `monero_daemon.py` | `get_daemon_status_summary` still used `order='id desc'` | Fixed to `last_checked desc` |
-| 2 | 🟡 | `monero_daemon.py` | `cleanup_old_records` still used `order='id desc'` | Fixed to `last_checked desc` |
-| 3 | 🟢 | `monero_daemon.py` | `SELECT FOR UPDATE` requires active transaction — comment missing | Comment added |
-| 4 | 🔴 | `monero_payment.py` | `hmac.new()` is undocumented alias — use `hmac.HMAC()` explicitly | Replaced with `hmac.HMAC(...).hexdigest()` |
-| 5 | 🟡 | `monero_payment.py` | f-string in `message_post` body bypassed translation | Changed to `_("...") % str(e)` |
-| 6 | 🟡 | `monero_payment.py` | Overpaid state unreachable — ternary checked `partial` before `overpaid` | Reordered: `overpaid` checked before `partial` |
-| 7 | 🟡 | `monero_payment.py` | Docstring example showed old two-arg `_payment_confirmed` call | Docstring updated |
-| 8 | 🟢 | `monero_payment.py` | Float fields not documented as accepted technical debt | Noted in field help text (completed in v3) |
-| 9 | 🟡 | `monero_transaction.py` | `confirmations` `store=True` but `block_height` never changes — stale after first write | Changed to `store=False` |
-| 10 | 🟡 | `monero_transaction.py` | `timestamp = fields.Datetime(required=True)` but blockchain can return `None` | Changed to `required=False` |
-| 11 | 🟡 | `payment_provider.py` | `amount / rate` still float division in `_create_monero_from_fiat_payment` | Changed to `Decimal` arithmetic |
-| 12 | 🟡 | `payment_provider.py` | `import time` inside `_fetch_xmr_rate` method body | Moved to module-level imports |
-| 13 | 🟡 | `payment_provider.py` | `1e12` float constant for piconero conversion | Changed to `1_000_000_000_000` integer |
-| 14 | 🟢 | `payment_provider.py` | `_generate_subaddress(self, provider, label)` — `provider` param unused | Removed `provider` parameter |
-| 15 | 🔴 | `controllers/main.py` | `base64` not imported — `NameError` when serving QR codes | `import base64` added |
-| 16 | 🟡 | `controllers/main.py` | `_verify_access_token()` may not exist in Odoo 18 | Replaced with `_validate_order_access()` |
-| 17 | 🟡 | `controllers/main.py` | All exceptions swallowed in `monero_payment_processor` — no logging | `_logger.error(...)` added before redirect |
-| 18 | 🟢 | `controllers/main.py` | Fetch-before-lock TOCTOU in `_validate_and_lock_order` | Low risk; documented |
-| 19 | 🟡 | `res_config_settings.py` | `monero_rpc_password` in both provider record and system params | Documented; single source recommended |
-| 20 | 🔴 | `test_sales_order.py` | `assert payment.state in ('confirmed', 'done', 'paid')` — invalid states | Fixed to `assertEqual(payment.state, 'confirmed')` |
-| 21 | 🟡 | `test_sales_order.py` | `datetime.utcnow()` — naive datetime | Fixed to `datetime.now(tz=timezone.utc)` |
-| 22 | 🟡 | `test_sales_order.py` | `MAX(payment_id)` on Char field — lexicographic not numeric | Fixed to `MAX(id)` |
-| 23 | 🟡 | `test_sales_order.py` | `warnings.warn(...)` as skip mechanism | Removed; comment added |
-| 24 | 🟢 | `test_sales_order.py` | Scenario 2 (address reuse) had no assertions | Assertions added |
-| 25 | 🟡 | `test_payment_provider.py` | `_payment_confirmed(payment, {...})` — wrong signature after fix | Fixed to `_payment_confirmed({...})` |
+### 16. Monero Manager could write/create any POS order, unscoped
+**Was:** same pattern on `pos.order` — blanket read/write/create with no rule limiting it to
+Monero-related orders.
+
+**Fix:** scoped to orders that actually have a Monero payment attached (`monero_payment_id !=
+False`), via the same per-version mechanism as Finding 15.
+
+**Verified by:** `test_a02_monero_manager_pos_order_grant_must_be_scoped`.
+
+### 17. Internal error text was echoed straight back to anonymous callers
+**Was:** both `check_payment_status` and `verify_payments` (the controller routes) caught any
+exception and returned `str(e)` verbatim to the caller — including, in one reproduction,
+internal RPC connection details (hostname, port) from a simulated wallet-RPC failure.
+
+**Fix:** both now log the real exception server-side and return a generic message to the client.
+
+**Verified by:** `test_h04_status_error_must_not_leak_internal_hosts`.
+
+### 18. The token-gated QR image was marked publicly cacheable
+**Was:** `Cache-Control: public, max-age=3600` on a response gated by the order's access token —
+a shared cache could serve one customer's QR code (and receiving address) to another visitor.
+
+**Fix:** `Cache-Control: private, max-age=3600`.
+
+**Verified by:** `test_h09_token_protected_qr_must_not_be_publicly_cacheable`.
+
+### 19. A dead code branch would have raised if it were ever reached
+**Was:** an "RPC-level filter" optimization guarded by `if self.is_subaddress and
+self.subaddress_index`, which was always false because `subaddress_index` was never populated
+(see Finding 5) — so the branch was dead. Had it run, the real `monero-python` library rejects
+its filter kwargs with `ValueError`, not the `TypeError` the fallback caught, so it would have
+raised instead of falling back.
+
+**Fix:** broadened the `except` to catch `ValueError` too. Populating `subaddress_index` as part
+of Finding 5's fix means this branch is no longer dead — it now runs on every payment, falls
+through to a full scan (the library still rejects those kwargs; this isn't a real optimization,
+just no longer a crash risk), and does so cleanly.
+
+**Verified by:** `test_s07_subaddress_filter_branch_no_longer_crashes`.
 
 ---
 
-## Pass 3 — Third Review (15 Issues)
+## Not fixed, because they were already correct — documented, not defects
+Two probes in the previous version's "not re-confirmed as defects" section stay exactly that on
+re-verification, now with tests that assert the actual intended behavior instead of merely
+observing it:
 
-**Rating: 4.8 / 5 — Near production-ready**
+- **Overpayments never auto-confirm regardless of confirmation count** — `test_s02` now asserts
+  this directly: `state == 'overpaid'`, not a defect to fix.
+- **Funds arriving after a payment is marked `expired` are not recorded** — `test_s04` now
+  asserts this directly too. `check_payment_status`'s early-return guard for
+  `confirmed`/`expired`/`failed` is deliberate (its own comment says so); whether it's the right
+  business call is worth the module documenting for admins, but it isn't a code defect.
 
-| # | Sev | File | Issue | Fix Applied |
-|---|---|---|---|---|
-| 1 | 🔴 | `monero_transaction.py` | `is_confirmed` `store=True` depended on non-stored `confirmations` — field frozen after first write | Changed to `store=False` |
-| 2 | 🟡 | `monero_transaction.py` | `_order = 'timestamp desc'` on nullable field — unpredictable sort | Changed to `'create_date desc'` |
-| 3 | 🟡 | `monero_transaction.py` | `monero_payment.confirmations` cross-model dependency on non-stored field — stale | Made `monero_payment.confirmations` also `store=False` |
-| 4 | 🟡 | `monero_payment.py` | `provider.confirmation_threshold` on empty recordset in `_get_status_message` — `MissingError` | Guard: `provider.confirmation_threshold if provider else 10` |
-| 5 | 🟡 | `monero_payment.py` | `provider.confirmation_threshold` on empty recordset in `check_payment_status` — `MissingError` | Explicit `UserError` when provider not configured |
-| 6 | 🟢 | `monero_payment.py` | Float fields undocumented as precision-limited technical debt | IEEE 754 precision warning added to all five Float field help texts |
-| 7 | 🟡 | `controllers/main.py` | `_validate_and_lock_order` used `!=` not `hmac.compare_digest` — inconsistent with `_validate_order_access` | Fixed to `hmac.compare_digest` |
-| 8 | 🟡 | `controllers/main.py` | `access_token` not forwarded from JSON endpoint — context for JS | Comment and `Issue 9` note added |
-| 9 | 🟡 | `controllers/main.py` | `'status'` key in controller vs `'state'` key in model — maintenance hazard | Comment documenting both consumers added |
-| 10 | 🟢 | `controllers/main.py` | Fetch-before-lock TOCTOU in `_validate_and_lock_order` (low risk) | Accepted; documented |
-| 11 | 🔴 | `payment_form_monero.js` | RPC payload missing `access_token` — every checkout payment rejected by server | `access_token` extracted from page and included in payload |
-| 12 | 🟢 | `monero_daemon.py` | f-strings in daemon error storage strings — style inconsistency | Accepted; strings are internal, not user-facing |
-| 13 | 🟡 | `test_payment_provider.py` | `test_check_payment_status_confirmed` would fail without `monero.daemon` record in DB | Daemon record created in `setUp` with `current_height=2000` |
-| 14 | 🟢 | `test_payment_provider.py` | Over-broad `env.ref` mock could interfere with other ORM calls | Selective side-effect mock applied |
-| 15 | 🟢 | `test_sales_order.py` | `import warnings` unused after v2 fix | Import removed |
+One conclusion changed on re-verification, and is now hardened rather than left alone:
+**`/verify` accepted any authenticated user, including portal customers**, reasoned about in the
+previous version as "not a bypass since the lookup key is a secret" — true once Finding 5 is
+fixed, but there's still no legitimate reason for a portal customer to reach a bulk-verification
+endpoint. It's now restricted to the module's own internal groups
+(`test_h10_verify_route_must_not_be_open_to_portal_users`).
 
 ---
 
-## Final State — Resolved Issue Summary
+## Scope of this pass
+**18.0** got the full adversarial treatment: all 19 fixes above were made directly in this
+version's source and re-verified with 65/65 tests (38 shipped + 27 probes) against a real Odoo
+18.0 + PostgreSQL install over real HTTP.
 
-### By Severity
+**19.0 and 20.0** got every fix ported via diff/patch against their own version-specific source
+(handling, by hand, the two places a mechanical port would have been wrong: 20.0's Binary field
+now reads back as a `BinaryBytes` object needing `.to_base64()` rather than raw bytes, and
+20.0's merge of `ir.rule`/`ir.model.access` into a single `ir.access.csv` with an inline `domain`
+column, used for Findings 15 and 16 instead of separate `ir.rule` XML records). Two shipped
+tests needed the same corrections on both versions as on 18.0 (Finding 5's `payment_id`
+assertion; Finding 6's `payment_page` token argument). Both were then installed fresh on their
+own real Odoo (19.0, 20.0) with real PostgreSQL and their own shipped suites re-run: **39/39 on
+19.0, 41/41 on 20.0.** The 27-probe adversarial suite itself was not ported to 19.0/20.0 in this
+pass — their shipped tests confirm the fixes didn't break anything version-specific, but the
+deeper adversarial verification (guest checkout actually succeeding end-to-end, idempotency,
+ACL scoping, etc.) was only directly exercised against 18.0.
 
-| Severity | v1 | v2 | v3 | Total |
-|---|---|---|---|---|
-| 🔴 Critical/High | 27 | 3 | 2 | **32** |
-| 🟡 Moderate | 66 | 15 | 8 | **89** |
-| 🟢 Low | 31 | 7 | 5 | **43** |
-| **Total** | **124** | **25** | **15** | **164** |
-
-### By File
-
-| File | v1 | v2 | v3 | Total |
-|---|---|---|---|---|
-| `monero_daemon.py` | 11 | 2 | 1 | 14 |
-| `monero_payment.py` | 28 | 4 | 3 | 35 |
-| `monero_transaction.py` | 5 | 2 | 3 | 10 |
-| `payment_provider.py` | 20 | 4 | 0 | 24 |
-| `pos_payment.py` | 5 | 0 | 0 | 5 |
-| `res_config_settings.py` | 6 | 1 | 0 | 7 |
-| `hooks.py` | 2 | 0 | 0 | 2 |
-| `__manifest__.py` | 4 | 0 | 0 | 4 |
-| `controllers/main.py` | 15 | 4 | 4 | 23 |
-| `payment_form_monero.js` | 5 | 0 | 1 | 6 |
-| `payment_screen_monero.js` | 8 | 0 | 0 | 8 |
-| `test_controllers.py` | 4 | 1 | 0 | 5 |
-| `test_payment_provider.py` | 5 | 1 | 2 | 8 |
-| `test_sales_order.py` | 5 | 5 | 1 | 11 |
-| `monero_transaction.py` (cross) | 1 | 1 | 0 | 2 |
-| **Total** | **124** | **25** | **15** | **164** |
-
----
-
-## Remaining Accepted Technical Debt
-
-The following items were identified and documented but intentionally not refactored due to scope — they require database migrations or significant architectural changes:
-
-| Item | Risk | Recommended Future Fix |
-|---|---|---|
-| XMR amounts stored as `fields.Float` | Low — ~15 significant digits sufficient for amounts < 1000 XMR | Migrate to `Integer` (piconeros) with `fields.Monetary` display |
-| RPC passwords in database plaintext | Medium — requires DB read access to exploit | Move to environment variables or Odoo secrets manager |
-| Subaddress orphaning on DB rollback | Low — requires wallet reconciliation | Implement periodic orphan-detection cron |
-| Single exchange rate cache shared across workers | Low — brief inconsistency window | Use Redis or `ir.config_parameter` with pessimistic locking |
-
----
-
-## Final Module Rating
-
-| Category | Rating | Notes |
-|---|---|---|
-| Security | ✅ Excellent | Token validation, row locks, access control on all endpoints |
-| Reliability | ✅ Good | Race conditions resolved, terminal state guards, non-stored computed fields |
-| Financial Precision | ⚠️ Acceptable | Float documented as technical debt; `Decimal` used in all calculations |
-| Error Handling | ✅ Good | No swallowed exceptions; all errors logged and surfaced |
-| Test Quality | ✅ Good | Correct assertions, timezone-aware dates, meaningful scenarios |
-| Code Quality | ✅ Good | Translation correct, logging clean, dead code removed |
-| **Overall** | **5.0 / 5** | **All 164 identified issues resolved** |
-
----
-
-*End of complete three-pass code review. 164 issues identified and resolved across 14 files.*
+## POS frontend — unchanged from the previous review
+Still not verified: no browser or POS session was run on any version in this pass either. The
+19.0 order-validation override and the 20.0 popup-patch gap noted previously are unaffected by
+anything in this document and remain open.

@@ -574,8 +574,12 @@ class MoneroPayment(models.Model):
                         account=0, subaddr=self.subaddress_index
                     )
                     filtered = list(all_incoming)
-                except TypeError:
-                    # Library version doesn't support keyword filtering — fall back
+                except (TypeError, ValueError):
+                    # Library version doesn't support keyword filtering, or rejects
+                    # these particular kwargs outright (monero-python's real
+                    # PaymentManager raises ValueError, not TypeError, for
+                    # unrecognized filter kwargs -- Issue 15 fix: only catching
+                    # TypeError here meant this fallback never actually triggered).
                     all_incoming = wallet.incoming()
                     filtered = [
                         t for t in all_incoming
@@ -617,6 +621,7 @@ class MoneroPayment(models.Model):
                         'block_height': getattr(transaction, 'height', None),
                         'timestamp': getattr(transaction, 'timestamp', None) or fields.Datetime.now(),
                         'confirmations': getattr(transaction, 'confirmations', 0),
+                        'wallet_reported_confirmations': getattr(transaction, 'confirmations', 0),
                         'payment_id': self.id,
                         'payment_type': 'in',
                         'account_index': getattr(transfer, 'account_index', None),
@@ -653,8 +658,15 @@ class MoneroPayment(models.Model):
             # 'confirmed' on the poll that first saw enough confirmations).
             # Upsert transaction records — never wipe history
             for tx_data in transactions:
+                # Issue 3 fix: scope the dedup key to (txid, payment_id), not txid alone.
+                # A single on-chain transaction can legitimately satisfy more than one
+                # pending monero.payment (e.g. it matches two different subaddresses in
+                # the same wallet). Deduplicating by txid globally meant only the first
+                # payment to see it ever got a transaction_ids row, so any other payment
+                # it also satisfied had its confirmations permanently stuck at 0 even
+                # though amount_received was correctly credited.
                 existing = self.env['monero.transaction'].search(
-                    [('txid', '=', tx_data['txid'])], limit=1)
+                    [('txid', '=', tx_data['txid']), ('payment_id', '=', self.id)], limit=1)
                 if not existing:
                     self.env['monero.transaction'].create(tx_data)
                 else:
@@ -867,27 +879,49 @@ class MoneroPayment(models.Model):
                 except Exception as e:
                     _logger.error("Failed to confirm order %s: %s", self.order_ref, str(e))
 
-            # Send single confirmation email via the payment record template
-            template = self.env.ref(
-                'payment_monero_rpc.email_template_payment_confirmed', raise_if_not_found=False
-            )
-            if template:
-                template.send_mail(self.id, force_send=True)
+            # Issue 4 fix: previously any exception here (mail template rendering,
+            # mail server issues, etc.) was re-raised out of this method. The state
+            # write above had already committed 'confirmed' and the order was already
+            # confirmed by this point, but check_payment_status's outer try/except
+            # would catch that re-raised exception and call _handle_rpc_error(), which
+            # overwrites the record back to state='failed' -- leaving a confirmed,
+            # fulfilled order permanently paired with a payment record that claims to
+            # have failed. Money already received and an order already confirmed must
+            # never be undone by a failure in a non-critical follow-up step, so these
+            # are now caught and logged here rather than propagated.
+            try:
+                # Send single confirmation email via the payment record template
+                template = self.env.ref(
+                    'payment_monero_rpc.email_template_payment_confirmed', raise_if_not_found=False
+                )
+                if template:
+                    template.send_mail(self.id, force_send=True)
+            except Exception as e:
+                _logger.error(
+                    "Payment %s confirmed, but sending the confirmation email failed: %s",
+                    self.payment_id, str(e))
 
-            self.message_post(body=_(
-                "Payment confirmed with %(conf)d confirmations. "
-                "Amount received: %(amount)f XMR"
-            ) % {'conf': self.confirmations, 'amount': self.amount_received})
+            try:
+                self.message_post(body=_(
+                    "Payment confirmed with %(conf)d confirmations. "
+                    "Amount received: %(amount)f XMR"
+                ) % {'conf': self.confirmations, 'amount': self.amount_received})
+            except Exception as e:
+                _logger.error(
+                    "Payment %s confirmed, but posting the chatter message failed: %s",
+                    self.payment_id, str(e))
         except Exception as e:
+            # A failure in the critical section (self.write(values) itself) is still
+            # logged and re-raised, since in that case 'confirmed' may not have been
+            # persisted at all.
             _logger.error("Payment confirmation failed: %s", str(e))
             raise
 
     def _handle_rpc_error(self, error_message):
-        """Handle RPC errors by updating payment state.
+        """Handle RPC errors by recording the error, without discarding progress.
 
         Called when RPC communication with Monero wallet/daemon fails.
-        Updates the payment record to reflect the error state and stores
-        the error message for debugging.
+        Records the error message and timestamp for troubleshooting.
 
         Parameters
         ----------
@@ -896,15 +930,26 @@ class MoneroPayment(models.Model):
 
         Notes
         -----
-        Sets payment state to 'failed' and records the timestamp of the error.
-        This helps distinguish between temporary network issues and persistent
-        configuration problems.
+        Issue (found via h05) fix: this previously set state='failed'
+        unconditionally on ANY error, including a single transient RPC timeout
+        or connection hiccup during a routine status poll. That meant a
+        wallet-rpc restart, brief network blip, or any other transient
+        condition could permanently mark an otherwise perfectly valid pending
+        payment as failed -- for a payment that may well confirm normally on
+        the very next poll a few minutes later.
+
+        The active/recoverable states ('pending', 'partial', 'paid_unconfirmed',
+        'overpaid') are left untouched here: an RPC error says nothing about
+        whether the underlying payment will eventually succeed, only that this
+        one poll couldn't check. 'expired' is handled separately and on its own
+        schedule by _cron_check_expired_payments. 'failed' is reserved for cases
+        where the payment is not already in one of those active states.
         """
-        self.write({
-            'error_message': error_message,
-            'state': 'failed',
-            'last_check': fields.Datetime.now()
-        })
+        vals = {'error_message': error_message, 'last_check': fields.Datetime.now()}
+        for payment in self:
+            if payment.state not in ('pending', 'partial', 'paid_unconfirmed', 'overpaid'):
+                vals['state'] = 'failed'
+            payment.write(dict(vals))
 
     @api.model
     def _cron_check_expired_payments(self):

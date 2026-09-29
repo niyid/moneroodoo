@@ -253,7 +253,7 @@ class PosOrder(models.Model):
            :meth:`_process_monero_payment` for complete payment processing
         """
         self.ensure_one()
-        provider = self.env['payment.provider'].search(
+        provider = self.env['payment.provider'].sudo().search(
             [('code', '=', 'monero_rpc')], limit=1)
         if not provider:
             raise ValidationError(_("No Monero payment provider configured"))

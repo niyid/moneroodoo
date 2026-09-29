@@ -21,26 +21,17 @@
         <field name="active">True</field>
     </record>
 
-    <record id="cron_check_payment_status" model="ir.cron">
-        <field name="name">Monero: Check Payment Status</field>
-        <field name="model_id" ref="model_monero_payment"/>
-        <field name="state">code</field>
-        <field name="code">model._cron_check_payment_status()</field>
-        <field name="interval_number">10</field>
-        <field name="interval_type">minutes</field>
-        <field name="active">True</field>
-    </record>
+    <!-- Issue 9 fix: this record's id ("cron_check_payment_status") was previously
+         duplicated by a second <record> further down with the same id, which
+         Odoo's loader treats as one record being redefined in place, and only the
+         second definition ever actually existed, calling
+         _cron_check_expired_payments() (already run separately by
+         cron_check_expired_payments above) rather than the
+         _cron_check_payment_status() this block's own code line named, which
+         was never implemented in the first place. Rather than invent a new
+         method that would just re-do what _cron_verify_pending_payments already
+         does every 5 minutes below, this now-pointless record has been removed. -->
 
-    <record id="cron_check_payment_status" model="ir.cron">
-        <field name="name">Monero: Check Payment Expiration</field>
-        <field name="model_id" ref="model_monero_payment"/>
-        <field name="state">code</field>
-        <field name="code">model._cron_check_expired_payments()</field>
-        <field name="interval_number">10</field>
-        <field name="interval_type">minutes</field>
-        <field name="active">True</field>
-    </record>
-    
     <record id="cron_update_xmr_rates" model="ir.cron">
         <field name="name">Monero: Update Exchange Rates</field>
         <field name="model_id" ref="model_payment_provider"/>

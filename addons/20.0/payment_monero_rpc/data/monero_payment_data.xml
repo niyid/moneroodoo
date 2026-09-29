@@ -29,8 +29,13 @@
           <field name="name">Monero RPC</field>
           <field name="code">monero_rpc</field>
           <!-- Odoo 20.0: payment.provider.state was replaced by a plain `active` flag -->
-          <field name="active">True</field>
-          <field name="is_published">True</field>
+          <!-- Issue 5 fix: previously active=True, is_published=True, plus
+               hardcoded credentials and a developer-specific wallet path below.
+               Ship inactive/unpublished with blank credentials so installing
+               this module doesn't put a live-looking payment method on the
+               storefront using publicly-known (in-source) credentials. -->
+          <field name="active">False</field>
+          <field name="is_published">False</field>
           <field name="allow_tokenization">False</field>
           <field name="allow_express_checkout">True</field>
           <field name="main_currency_id" ref="currency_xmr"/>
@@ -38,12 +43,12 @@
           <field name="network_type">stagenet</field>
           <field name="daemon_rpc_url">http://localhost:38081/json_rpc</field>
           <field name="rpc_url">http://localhost:38082/json_rpc</field>
-          <field name="rpc_user">rpc_user</field>
-          <field name="rpc_password">rpc_password</field>
+          <field name="rpc_user"></field>
+          <field name="rpc_password"></field>
           <field name="rpc_timeout">180</field>
           <field name="wallet_file">odoo_wallet</field>
-          <field name="wallet_password">odoo_wallet_password</field>
-          <field name="wallet_dir">/home/niyid/monero-x86_64-linux-gnu-v0.18.3.4/wallets</field>
+          <field name="wallet_password"></field>
+          <field name="wallet_dir"></field>
           <field name="exchange_rate_api">https://api.coingecko.com/api/v3/simple/price</field>
           <field name="manual_rates" eval="{'USD': 200, 'EUR': 180}"/>
       </record>

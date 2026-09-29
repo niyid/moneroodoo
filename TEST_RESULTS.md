@@ -10,11 +10,15 @@ talked to a real `monerod` or `monero-wallet-rpc`.
 |------|--------|-------------|
 | 18.0 | **65 / 65 pass** | 38 shipped tests + 27 adversarial probes (`tests/test_zz_audit_probes.py`) |
 | 19.0 | **39 / 39 pass** | shipped tests only |
-| 20.0 | **41 / 41 pass** (see note) | shipped tests only |
+| 20.0 | **39 tests, all pass** (runner reported 41; see note) | shipped tests only |
 
-Note on 20.0: the runner reported 41 passing. `tests/` on 20.0 contains 39 test methods (the
-same 39 as 19.0), so the runner count is 2 higher than the method count. This has not been
-reconciled; treat 39 as the number of distinct tests and 41 as the runner's reported total.
+Counts were re-checked by reading the test sources: 18.0 has 65 test methods (38 shipped +
+27 probes); 19.0 and 20.0 each have 39 (26 in `test_payment_provider.py`, 12 in
+`test_controllers.py`, 1 in `test_sales_order.py`). The one test 19.0/20.0 have beyond the 18.0
+shipped 38 is `test_json_routes_use_jsonrpc_type` (class `TestMoneroRoutesTargetJsonRpc`).
+An earlier Odoo run on 20.0 reported 41 passing; the two extra are not accounted for by any
+test in the module (no inherited test classes, no tests outside `tests/`), so 39 is the
+verified number and 41 the runner's unreconciled total.
 
 ## What the adversarial probes cover (18.0 only)
 

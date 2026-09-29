@@ -51,6 +51,7 @@ Highlights that affect how the module behaves:
 | `@route(type='json')` → `type='jsonrpc'` | 19.0 `http.py` warns "Since 19.0, @route(type='json') is a deprecated alias" |
 | POS JS import paths moved (`pos_hook`, `make_awaitable_dialog`, `OnlinePaymentPopup`) | new paths exist in the 19.0 tree |
 | `_()` needs `self.env` of the calling frame | test-only stub for directly instantiated controllers |
+| `_sql_constraints` is ignored (Odoo logs "no longer supported, please define models.Constraint") | Declared as `models.Constraint` attributes on `monero.payment` and `monero.transaction`. Found by re-running the tests and querying `pg_constraint`: on 19.0/20.0 the DB had no unique/check constraints until this change; 18.0 is unaffected. Guarded by `tests/test_db_constraints.py` |
 
 `security/monero_groups.xml` (the old, never-wired workaround that dropped the category and
 record rules) exists on 18.0 only; it is removed from 19.0 and 20.0. The access-control scoping

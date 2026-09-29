@@ -43,17 +43,18 @@ class MoneroTransaction(models.Model):
     _description = 'Monero Transaction'
     _order = 'create_date desc'  # timestamp is optional/nullable; id desc is always stable
 
-    _sql_constraints = [
-        # Issue 3 fix: was UNIQUE(txid) alone, which made it impossible for the
-        # same on-chain transaction to ever be recorded against a second
-        # monero.payment it also satisfies (see the search-by-txid-only upsert
-        # this constraint used to pair with, in monero_payment.py
-        # check_payment_status). Scoping to (txid, payment_id) still prevents
-        # true duplicate rows while allowing one tx to satisfy more than one
-        # payment.
-        ('txid_payment_unique', 'UNIQUE(txid, payment_id)',
-         'This transaction has already been recorded for this payment!'),
-    ]
+    # Odoo 20 ignores `_sql_constraints` (it only logs a warning), so table
+    # constraints must be declared as `models.Constraint` attributes.
+    # Issue 3 fix: was UNIQUE(txid) alone, which made it impossible for the
+    # same on-chain transaction to ever be recorded against a second
+    # monero.payment it also satisfies (see the search-by-txid-only upsert this
+    # constraint used to pair with, in monero_payment.py check_payment_status).
+    # Scoping to (txid, payment_id) still prevents true duplicate rows while
+    # allowing one tx to satisfy more than one payment.
+    _txid_payment_unique = models.Constraint(
+        'UNIQUE(txid, payment_id)',
+        'This transaction has already been recorded for this payment!',
+    )
 
     payment_id = fields.Many2one(
         'monero.payment',

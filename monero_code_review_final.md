@@ -313,3 +313,12 @@ ACL scoping, etc.) was only directly exercised against 18.0.
 Still not verified: no browser or POS session was run on any version in this pass either. The
 19.0 order-validation override and the 20.0 popup-patch gap noted previously are unaffected by
 anything in this document and remain open.
+
+## Addendum: constraints on 19.0 and 20.0
+Re-running the suites on freshly installed Odoo found that Findings 3 (`UNIQUE(txid, payment_id)`) and the
+pre-existing `UNIQUE(payment_id)` / `CHECK(amount > 0)` were **not created on 19.0 and 20.0**: from Odoo 19
+`_sql_constraints` is ignored (only a warning is logged), and the module still declared them that way. The
+shipped tests passed anyway because none asserted a constraint exists. They are now `models.Constraint`
+attributes on both versions, verified in `pg_constraint`, and guarded by `tests/test_db_constraints.py`.
+18.0 was unaffected. Finding 3's "database constraint is now scoped to `(txid, payment_id)`" was therefore
+only true on 18.0 until this change.

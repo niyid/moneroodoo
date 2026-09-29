@@ -249,10 +249,11 @@ class MoneroPayment(models.Model):
         help="True if using modern subaddresses, False if using legacy Payment IDs"
     )
 
-    _sql_constraints = [
-        ('payment_id_unique', 'UNIQUE(payment_id)', 'Payment ID must be unique!'),
-        ('amount_positive', 'CHECK(amount > 0)', 'Amount must be positive!'),
-    ]
+    # Odoo 19+ ignores `_sql_constraints`; use models.Constraint instead.
+    _payment_id_unique = models.Constraint(
+        'UNIQUE(payment_id)', 'Payment ID must be unique!')
+    _amount_positive = models.Constraint(
+        'CHECK(amount > 0)', 'Amount must be positive!')
 
     @api.depends('order_ref', 'amount', 'currency')
     def _compute_payment_ref(self):

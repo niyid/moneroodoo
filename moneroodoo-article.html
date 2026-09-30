@@ -946,6 +946,20 @@ new_state = (
         <p>Creating a payment, the payment page, the QR code, the invoice and the proof all require the order's access token, checked with <code class="inline">hmac.compare_digest</code>. The status poll is keyed by the 64-character <code class="inline">payment_id</code> and returns a generic message on error instead of internal RPC details. The bulk <code class="inline">/verify</code> route is restricted to users in the Monero groups, and the token-gated QR is served with <code class="inline">Cache-Control: private</code>. Funds that arrive after a payment has expired are not recorded; that guard is deliberate, so decide your expiry policy with it in mind.</p>
       </div>
     </div>
+    <h3>Route by route</h3>
+    <p>
+      Nine routes sit under <code class="inline">/shop/payment/monero/</code>. Which guard applies to each is a design
+      decision, and one of them is weaker than the rest:
+    </p>
+    <div class="matrix-wrap"><table class="matrix">
+      <tr><th>Route</th><th>Guard</th><th>Notes</th></tr>
+      <tr><td>process (JSON)</td><td>Order access token, <code class="inline">hmac.compare_digest</code></td><td>Refuses cancelled orders and reuses an active payment for the order.</td></tr>
+      <tr><td>transaction (GET redirect)</td><td>Order access token</td><td><strong>Creates a new payment on every call:</strong> no cancelled-order check and no reuse of an active payment. Present on all three series and not fixed.</td></tr>
+      <tr><td>page, qr, invoice, proof</td><td>Order access token; a missing or wrong token returns 404</td><td>These take the sequential database id, so the token is what stops one customer reading another's address and order. The proof also requires a confirmed payment.</td></tr>
+      <tr><td>status (JSON)</td><td>The 64-character <code class="inline">payment_id</code></td><td>Polled anonymously by the payment page. It cannot be enumerated, returns generic errors, and an anonymous poll cannot fail an active payment.</td></tr>
+      <tr><td>verify (JSON)</td><td>Monero user groups</td><td>A staff bulk check, not a customer route.</td></tr>
+      <tr><td>translation (JSON)</td><td>Public</td><td>A no-op stub kept for backward compatibility; it returns an empty list.</td></tr>
+    </table></div>
   </section>
   <section>
     <div class="section-kicker">Payment Proofs</div>
@@ -1177,7 +1191,18 @@ access_payment_provider_monero_admin,payment.provider.monero.admin,payment.provi
       <div class="callout-icon">⚠️</div>
       <div class="callout-body">
         <strong>Known gaps</strong>
-        <p>The 27 adversarial probes exist on 18.0 only; 19.0 and 20.0 run their shipped suites plus the constraint tests. No browser or POS session has been run, so the POS and checkout JavaScript are unverified on every series. Wallet and daemon calls are mocked in every test and nothing has talked to a real <code class="inline">monerod</code> or <code class="inline">monero-wallet-rpc</code>, so try stagenet before mainnet. Exchange-rate fetches were blocked in the test sandbox.</p>
+        <p>The 27 adversarial probes exist on 18.0 only; 19.0 and 20.0 run their shipped suites plus the constraint tests. No browser or POS session has been run, so the POS and checkout JavaScript are unverified on every series. Wallet and daemon calls are mocked in every test and nothing has talked to a real <code class="inline">monerod</code> or <code class="inline">monero-wallet-rpc</code>, so try stagenet before mainnet. Exchange-rate fetches were blocked in the test sandbox. The GET route <code class="inline">/shop/payment/monero/transaction</code> validates the order token but creates a new payment on every call, with no cancelled-order check and no reuse of an active payment, on all three series; only the JSON <code class="inline">process</code> route has those protections.</p>
+      </div>
+    </div>
+    <div class="callout callout-info">
+      <div class="callout-icon">🧾</div>
+      <div class="callout-body">
+        <strong>Accepted, documented debt</strong>
+        <p>Amounts are stored as <code class="inline">Float</code> (12 digits, as described above); integer piconeros would be exact and need a migration.
+        The RPC and wallet passwords are stored as plain text in the database, and <code class="inline">password=True</code> only masks them in the interface.
+        A subaddress can be orphaned: the wallet issues it before the payment record is created, so a database rollback after that leaves an unused
+        subaddress labelled <code class="inline">Order_&lt;ref&gt;</code> in the wallet. The exchange-rate cache is 60 seconds per currency in
+        <code class="inline">ir.config_parameter</code> and is shared by all workers, so workers can briefly disagree.</p>
       </div>
     </div>
   </section>
